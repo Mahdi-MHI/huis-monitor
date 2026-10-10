@@ -36,14 +36,6 @@ python -m http.server 8000 --directory site
 Then open http://localhost:8000. Add `--gemeente GM0503` (repeatable) to the first
 command for a quick trial with a few gemeenten.
 
-## Streamlit app
-
-An earlier version of the same idea, run locally:
-
-```
-streamlit run src/huis_monitor/app.py
-```
-
 ## Command line
 
 ```
