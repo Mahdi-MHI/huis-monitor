@@ -3,7 +3,7 @@ import httpx
 from huis_monitor import search
 from huis_monitor.areas import Buurt, Centre
 from huis_monitor.criteria import Limit
-from huis_monitor.search import assess_area
+from huis_monitor.search import AreaData, assess, assess_area
 from huis_monitor.stats import NeighbourhoodStats
 
 
@@ -80,3 +80,19 @@ def test_assesses_every_buurt_and_reads_each_gemeente_once(monkeypatch):
     assert assessments[2].stats is None
     assert assessments[2].verdict.unknown
     assert assessments[2].verdict.missing == ("figures",)
+
+
+def test_assess_can_be_repeated_with_other_limits():
+    area = AreaData(
+        centre=Centre("Delft", 0.0, 0.0),
+        radius_km=15,
+        buurten=[buurt("BU_A", "GM0001", 1.0)],
+        stats={"BU_A": figures("BU_A", 60)},
+    )
+
+    strict = assess(area, [Limit(metric="owner_occupied_pct", kind="min", value=80)])
+    loose = assess(area, [Limit(metric="owner_occupied_pct", kind="min", value=40)])
+
+    assert not strict[0].verdict.passed
+    assert loose[0].verdict.passed
+    assert assess(area, [])[0].verdict.passed
