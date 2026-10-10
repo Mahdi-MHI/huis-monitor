@@ -2,17 +2,22 @@
 
 python -m huis_monitor address "Markt 87 Delft"
 python -m huis_monitor area Delft --radius 15
+python -m huis_monitor find Delft --radius 15
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from collections import Counter
+from pathlib import Path
 
 import httpx
 
 from huis_monitor.areas import TIMEOUT_SECONDS, AreaError, find_buurten_within, find_centre
+from huis_monitor.criteria import CriteriaError, load_limits
 from huis_monitor.geocode import GeocodeError, geocode
+from huis_monitor.search import assess_area
 from huis_monitor.stats import NeighbourhoodStats, StatsError, fetch_stats
 
 
@@ -84,6 +89,47 @@ def run_area(town: str, radius_km: float, show_all: bool) -> None:
             )
 
 
+def _report_progress(gemeente: str, number: int, total: int) -> None:
+    print(f"  reading {gemeente} ({number}/{total})", file=sys.stderr)
+
+
+def run_find(town: str, radius_km: float, criteria_path: Path) -> None:
+    limits = load_limits(criteria_path)
+    with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
+        centre, assessments = assess_area(town, radius_km, limits, client, _report_progress)
+
+    passed = [item for item in assessments if item.verdict.passed]
+    print(f"Centre: {centre.name}")
+    print(
+        f"{len(passed)} of {len(assessments)} neighbourhoods within {radius_km:g} km "
+        f"meet the criteria in {criteria_path}"
+    )
+    print()
+
+    print(
+        f"{'Code':<12}{'Km':>5}  {'Gemeente':<22}{'Buurt':<30}"
+        f"{'Burgl':>6}{'Viol':>6}{'Owner%':>8}{'LowInc%':>9}{'WOZ':>10}"
+    )
+    for item in passed:
+        buurt, stats = item.buurt, item.stats
+        print(
+            f"{buurt.code:<12}{buurt.distance_km:>5.1f}  "
+            f"{buurt.gemeente_name[:21]:<22}{buurt.name[:29]:<30}"
+            f"{_show(stats.per_1000(stats.burglaries)):>6}"
+            f"{_show(stats.per_1000(stats.violent_crimes)):>6}"
+            f"{_show(stats.owner_occupied_pct):>8}"
+            f"{_show(stats.lowest40_income_households_pct):>9}"
+            f"{_show(stats.avg_woz_eur, '{:,}'):>10}"
+        )
+
+    reasons = Counter(metric for item in assessments for metric in item.verdict.failures)
+    if reasons:
+        print()
+        print("Why neighbourhoods were rejected (one can fail several limits)")
+        for metric, count in reasons.most_common():
+            print(f"  {metric:<34}{count:>5}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="huis_monitor",
@@ -99,13 +145,25 @@ def main(argv: list[str] | None = None) -> int:
     area.add_argument("--radius", type=float, default=15.0, help="in km (default: 15)")
     area.add_argument("--list", action="store_true", help="also print every neighbourhood")
 
+    find = commands.add_parser("find", help="list the neighbourhoods that meet the criteria")
+    find.add_argument("town", help="for example Delft")
+    find.add_argument("--radius", type=float, default=15.0, help="in km (default: 15)")
+    find.add_argument(
+        "--criteria",
+        type=Path,
+        default=Path("criteria.toml"),
+        help="file with the limits (default: criteria.toml)",
+    )
+
     args = parser.parse_args(argv)
     try:
         if args.command == "address":
             run_address(args.address)
-        else:
+        elif args.command == "area":
             run_area(args.town, args.radius, args.list)
-    except (GeocodeError, StatsError, AreaError) as exc:
+        else:
+            run_find(args.town, args.radius, args.criteria)
+    except (GeocodeError, StatsError, AreaError, CriteriaError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     return 0

@@ -100,7 +100,7 @@ def test_requests_a_box_around_the_centre():
 
     find_buurten_within(CENTRE, 15, wfs_client([[]], seen))
 
-    # Commas must reach the server unencoded, otherwise it ignores the box.
+    # The box is sent with plain commas, the form checked against the live service.
     assert "&bbox=69000,432000,99000,462000&" in seen[0]
     assert "typeName=wijkenbuurten:buurten" in seen[0]
 

@@ -13,8 +13,14 @@ KERNCIJFERS_URLS = (
     "https://opendata.cbs.nl/ODataApi/odata/85984NED/TypedDataSet",  # 2024
 )
 # Geregistreerde misdrijven per wijk en buurt, yearly figures (police data).
-CRIME_URL = "https://dataderden.cbs.nl/ODataApi/OData/47018NED/TypedDataSet"
-TIMEOUT_SECONDS = 20.0
+CRIME_BASE_URL = "https://dataderden.cbs.nl/ODataApi/odata/47018NED"
+CRIME_URL = f"{CRIME_BASE_URL}/TypedDataSet"
+CRIME_BULK_URL = f"{CRIME_BASE_URL}/UntypedDataSet"
+CRIME_PERIODS_URL = f"{CRIME_BASE_URL}/Perioden"
+CRIME_COLUMNS = "WijkenEnBuurten,SoortMisdrijf,Perioden,GeregistreerdeMisdrijven_1"
+CRIME_TYPE_COUNT = 59  # rows per buurt per year in the crime table
+MAX_ROWS_PER_REQUEST = 9000  # CBS refuses requests for more than 10,000 rows
+TIMEOUT_SECONDS = 60.0
 
 COL_RESIDENTS = "AantalInwoners_5"
 COL_ORIGIN_NL = "Nederland_17"
@@ -88,7 +94,59 @@ def fetch_stats(buurt_code: str, client: httpx.Client | None = None) -> Neighbou
 
     figures = _fetch_kerncijfers(buurt_code, client)
     crime_year, crimes = _fetch_crimes(buurt_code, client)
+    return _build(buurt_code, figures, crime_year, crimes)
 
+
+def fetch_stats_for_gemeente(
+    gemeente_code: str, client: httpx.Client
+) -> dict[str, NeighbourhoodStats]:
+    """Return the key figures of every buurt in a gemeente, keyed by buurt code.
+
+    ``gemeente_code`` may be written as "GM0503" or "0503".
+    """
+    prefix = "BU" + gemeente_code.removeprefix("GM")
+
+    figures: dict[str, dict] = {}
+    columns = ",".join(("WijkenEnBuurten", *KERNCIJFERS_COLUMNS))
+    for url in KERNCIJFERS_URLS:
+        query = f"{url}?$filter=startswith(WijkenEnBuurten,'{prefix}')&$select={columns}"
+        for row in _get_rows_by_url(client, query):
+            code = row["WijkenEnBuurten"].strip()
+            merged = figures.setdefault(code, dict.fromkeys(KERNCIJFERS_COLUMNS))
+            for column in KERNCIJFERS_COLUMNS:
+                if merged[column] is None:
+                    merged[column] = row.get(column)
+
+    # One request per gemeente, unless it is so large that the answer would
+    # exceed the row limit; then one request per wijk (first 8 characters).
+    if len(figures) * CRIME_TYPE_COUNT <= MAX_ROWS_PER_REQUEST:
+        prefixes = [prefix]
+    else:
+        prefixes = sorted({code[:8] for code in figures})
+
+    period = _latest_crime_period(client)
+    crime_year = int(period[:4])
+    crimes: dict[str, dict[str, int]] = {}
+    for crime_prefix in prefixes:
+        query = (
+            f"{CRIME_BULK_URL}?$filter=startswith(WijkenEnBuurten,'{crime_prefix}')"
+            f" and Perioden eq '{period}'&$select={CRIME_COLUMNS}"
+        )
+        for row in _get_rows_by_url(client, query):
+            count = _as_count(row.get("GeregistreerdeMisdrijven_1"))
+            if count is not None:
+                code = row["WijkenEnBuurten"].strip()
+                crimes.setdefault(code, {})[row["SoortMisdrijf"].strip()] = count
+
+    return {
+        code: _build(code, merged, crime_year if code in crimes else None, crimes.get(code, {}))
+        for code, merged in figures.items()
+    }
+
+
+def _build(
+    buurt_code: str, figures: dict, crime_year: int | None, crimes: dict[str, int]
+) -> NeighbourhoodStats:
     residents = _as_int(figures[COL_RESIDENTS])
     violent = [crimes[code] for code in CRIME_VIOLENT if crimes.get(code) is not None]
     return NeighbourhoodStats(
@@ -112,13 +170,30 @@ def fetch_stats(buurt_code: str, client: httpx.Client | None = None) -> Neighbou
     )
 
 
-def _get_rows(client: httpx.Client, url: str, params: dict[str, str]) -> list[dict]:
+def _get_rows(client: httpx.Client, url: str, params: dict[str, str] | None = None) -> list[dict]:
     try:
-        response = client.get(url, params={**params, "$format": "json"})
+        response = client.get(url, params=params)
         response.raise_for_status()
         return response.json()["value"]
     except (httpx.HTTPError, KeyError, ValueError) as exc:
-        raise StatsError(f"CBS request failed ({url}): {exc}") from exc
+        raise StatsError(f"CBS request failed ({url.split('?')[0]}): {exc}") from exc
+
+
+def _get_rows_by_url(client: httpx.Client, url: str) -> list[dict]:
+    """Run a query whose URL is written out by hand.
+
+    Hand-written on purpose, so the commas inside ``startswith(...)`` and
+    ``$select`` are sent as plain commas: that is the form that was checked
+    against the live service. httpx's ``params`` would percent-encode them.
+    """
+    return _get_rows(client, f"{url}&$format=json")
+
+
+def _latest_crime_period(client: httpx.Client) -> str:
+    periods = _get_rows(client, f"{CRIME_PERIODS_URL}?$format=json")
+    if not periods:
+        raise StatsError("CBS lists no periods for the crime figures")
+    return max(period["Key"].strip() for period in periods)
 
 
 def _fetch_kerncijfers(buurt_code: str, client: httpx.Client) -> dict:
@@ -129,10 +204,7 @@ def _fetch_kerncijfers(buurt_code: str, client: httpx.Client) -> dict:
         rows = _get_rows(
             client,
             url,
-            {
-                "$filter": f"WijkenEnBuurten eq '{buurt_code}'",
-                "$select": ",".join(KERNCIJFERS_COLUMNS),
-            },
+            {"$filter": f"WijkenEnBuurten eq '{buurt_code}'", "$format": "json"},
         )
         if not rows:
             continue
@@ -150,24 +222,29 @@ def _fetch_crimes(buurt_code: str, client: httpx.Client) -> tuple[int | None, di
     rows = _get_rows(
         client,
         CRIME_URL,
-        {
-            "$filter": f"WijkenEnBuurten eq '{buurt_code}'",
-            "$select": "SoortMisdrijf,Perioden,GeregistreerdeMisdrijven_1",
-        },
+        {"$filter": f"WijkenEnBuurten eq '{buurt_code}'", "$format": "json"},
     )
     per_year: dict[int, dict[str, int]] = {}
     for row in rows:
-        count = row.get("GeregistreerdeMisdrijven_1")
+        count = _as_count(row.get("GeregistreerdeMisdrijven_1"))
         if count is None:
             continue
         year = int(row["Perioden"][:4])
-        per_year.setdefault(year, {})[row["SoortMisdrijf"].strip()] = int(count)
+        per_year.setdefault(year, {})[row["SoortMisdrijf"].strip()] = count
 
     years_with_total = [year for year, counts in per_year.items() if CRIME_TOTAL in counts]
     if not years_with_total:
         return None, {}
     latest = max(years_with_total)
     return latest, per_year[latest]
+
+
+def _as_count(value: object) -> int | None:
+    """Read a count that CBS sends as a number, padded text, or a blank marker."""
+    try:
+        return int(str(value).strip())
+    except ValueError:
+        return None
 
 
 def _as_int(value: float | None) -> int | None:
