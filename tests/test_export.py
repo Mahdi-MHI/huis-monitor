@@ -96,6 +96,16 @@ def test_writes_one_file_per_gemeente_and_an_index(fake_sources, tmp_path):
     assert index["average"]["residents"] == 4000
     assert [(g["code"], g["buurten"]) for g in index["gemeenten"]] == [("GM0503", 2), ("GM0603", 1)]
     assert index["gemeenten"][0]["bounds"] == [4.35, 52.0, 4.36, 52.01]
+    assert index["groups"][3]["title"] == "Residents by origin"
+    assert index["groups"][3]["figures"][0] == {
+        "metric": "origin_nl_pct",
+        "label": "The Netherlands",
+    }
+    assert index["crimes"][0] == {
+        "metric": "burglaries_per_1000",
+        "label": "Theft or burglary in home, garage, shed",
+        "count": "burglaries",
+    }
 
     delft = read(tmp_path / "gm" / "GM0503.json")
     assert delft["name"] == "Delft"
