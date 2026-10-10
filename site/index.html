@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Huis monitor</title>
+  <meta name="description" content="Compare Dutch neighbourhoods on crime and residents, using open data from CBS, the police and PDOK.">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="masthead">
+    <a class="brand" href="#/">Huis monitor</a>
+    <p class="masthead-note">Neighbourhood figures for house hunters in the Netherlands</p>
+  </header>
+
+  <main id="view" tabindex="-1">
+    <p class="loading">Loading the figures…</p>
+  </main>
+
+  <footer class="colophon">
+    <p>
+      Figures: CBS Kerncijfers wijken en buurten and registered crimes of the police, both open data
+      (CC BY 4.0). Borders and address search: PDOK. Map: © OpenStreetMap contributors.
+    </p>
+    <p id="data-note"></p>
+    <p>Figures are neighbourhood averages. Two streets in one neighbourhood can differ a lot.</p>
+  </footer>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
