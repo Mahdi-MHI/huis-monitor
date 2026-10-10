@@ -1,0 +1,29 @@
+# Limits a neighbourhood (buurt) must meet.
+#
+# Write   min_<figure> = number   or   max_<figure> = number.
+# Delete a line, or put # in front of it, to switch that limit off.
+# A neighbourhood without data for a limited figure is rejected.
+#
+# Figures you can limit:
+#   residents                        number of residents
+#   origin_nl_pct                    % of residents with origin Netherlands
+#   origin_europe_pct                % with origin elsewhere in Europe
+#   origin_outside_europe_pct        % with origin outside Europe
+#   density_per_km2                  residents per km2
+#   avg_woz_eur                      average WOZ value of homes, in euro
+#   owner_occupied_pct               % of homes that are owner-occupied
+#   avg_income_eur                   average income per resident, in euro
+#   lowest40_income_households_pct   % of households in the national lowest 40%
+#   urbanity                         1 = very urban ... 5 = rural
+#   crimes_total_per_1000            all registered crimes per 1,000 residents
+#   burglaries_per_1000              home burglaries per 1,000 residents
+#   violent_crimes_per_1000          violent crimes per 1,000 residents
+#   vandalism_per_1000               vandalism per 1,000 residents
+#   bike_thefts_per_1000             bicycle thefts per 1,000 residents
+
+[limits]
+min_residents = 200
+max_burglaries_per_1000 = 3
+max_violent_crimes_per_1000 = 8
+min_owner_occupied_pct = 40
+max_lowest40_income_households_pct = 50
