@@ -12,27 +12,37 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-## Web app
+## Website
+
+The website in `site/` is plain HTML and JavaScript, so it can be hosted on
+GitHub Pages. It has two ways in:
+
+- **Search an area**: a town and a radius, the highest number of crimes per 1,000
+  residents you accept for each type of crime, and the share of residents with
+  origin the Netherlands. You get a map and a list of the neighbourhoods that fit.
+- **One neighbourhood**: a postcode or address shows the page of the neighbourhood
+  it lies in.
+
+Each neighbourhood page shows who lives there and what the homes are like, next to
+the gemeente and the country, and a table of registered crimes.
+
+The site reads data files that are made by Python. To try it on your own machine:
+
+```
+python -m huis_monitor export            # the whole country, takes a while
+python -m http.server 8000 --directory site
+```
+
+Then open http://localhost:8000. Add `--gemeente GM0503` (repeatable) to the first
+command for a quick trial with a few gemeenten.
+
+## Streamlit app
+
+An earlier version of the same idea, run locally:
 
 ```
 streamlit run src/huis_monitor/app.py
 ```
-
-Choose a town and a radius and press **Load neighbourhoods**. Reading the figures
-takes about a minute the first time; after that they are remembered for as long
-as the app keeps running. Stop the app with Ctrl+C in the terminal.
-
-The **Limits** tab is where you say what you accept:
-
-- Residents and homes: a bar per topic (age, gender, marital status, origin,
-  households, owner-occupied and rental homes, education) shows the average of the
-  area, with a slider per share for the lowest and highest percentage you accept.
-- Safety: a table of crime types where you type the highest number per 1,000
-  residents you accept.
-- Other figures: residents, density, WOZ value, income and urbanity.
-
-The counts above the tabs and the **Map** change at once. **Download as
-criteria.toml** in the sidebar saves the limits you have set.
 
 ## Command line
 
@@ -40,6 +50,7 @@ criteria.toml** in the sidebar saves the limits you have set.
 python -m huis_monitor address "Markt 87 Delft"   # figures for one address
 python -m huis_monitor area Delft --radius 15     # neighbourhoods around a town
 python -m huis_monitor find Delft --radius 15     # those that meet criteria.toml
+python -m huis_monitor export --out site/data     # data files for the website
 ```
 
 ## Limits
