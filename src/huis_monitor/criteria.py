@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from huis_monitor.stats import NeighbourhoodStats
+from huis_monitor.stats import OTHER_CRIMES, SHARE_COLUMNS, NeighbourhoodStats
 
 # Every figure that can be limited with ``min_<name>`` or ``max_<name>``.
 METRICS: dict[str, Callable[[NeighbourhoodStats], float | None]] = {
@@ -27,6 +27,18 @@ METRICS: dict[str, Callable[[NeighbourhoodStats], float | None]] = {
     "vandalism_per_1000": lambda s: s.per_1000(s.vandalism),
     "bike_thefts_per_1000": lambda s: s.per_1000(s.bike_thefts),
 }
+
+
+def _share(name: str) -> Callable[[NeighbourhoodStats], float | None]:
+    return lambda s: s.shares.get(name)
+
+
+def _other_crime(name: str) -> Callable[[NeighbourhoodStats], float | None]:
+    return lambda s: s.per_1000(s.other_crimes.get(name))
+
+
+METRICS.update({name: _share(name) for name in SHARE_COLUMNS})
+METRICS.update({f"{name}_per_1000": _other_crime(name) for name in OTHER_CRIMES})
 
 
 class CriteriaError(Exception):
@@ -101,3 +113,10 @@ def evaluate(stats: NeighbourhoodStats, limits: list[Limit]) -> Verdict:
         elif limit.kind == "min" and actual < limit.value:
             failures[limit.metric] = f"{actual:g} is below the minimum {limit.value:g}"
     return Verdict(failures=failures, missing=tuple(missing))
+
+
+def dump_limits(limits: list[Limit]) -> str:
+    """Write limits as the text of a criteria file that ``load_limits`` can read."""
+    lines = ["[limits]"]
+    lines += [f"{limit.kind}_{limit.metric} = {limit.value:g}" for limit in limits]
+    return "\n".join(lines) + "\n"

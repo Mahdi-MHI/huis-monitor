@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from huis_monitor.criteria import CriteriaError, Limit, evaluate, load_limits
+from huis_monitor.criteria import CriteriaError, Limit, dump_limits, evaluate, load_limits
 from huis_monitor.stats import NeighbourhoodStats
 
 GOOD = NeighbourhoodStats(
@@ -103,3 +103,28 @@ def test_value_equal_to_limit_passes():
     verdict = evaluate(replace(GOOD, burglaries=3, owner_occupied_pct=40), LIMITS)
 
     assert verdict.passed
+
+
+def test_shares_and_extra_crime_types_can_be_limited():
+    stats = replace(GOOD, shares={"men_pct": 49.0}, other_crimes={"arson": 3})
+    limits = [
+        Limit(metric="men_pct", kind="min", value=50),
+        Limit(metric="arson_per_1000", kind="max", value=2),
+        Limit(metric="women_pct", kind="max", value=60),
+    ]
+
+    verdict = evaluate(stats, limits)
+
+    assert verdict.failures == {
+        "men_pct": "49 is below the minimum 50",
+        "arson_per_1000": "3 is above the maximum 2",
+    }
+    assert verdict.missing == ("women_pct",)
+
+
+def test_dumped_limits_can_be_loaded_again(tmp_path):
+    limits = [*LIMITS, Limit(metric="age_65_plus_pct", kind="max", value=22.5)]
+
+    path = write(tmp_path, dump_limits(limits))
+
+    assert load_limits(path) == limits
