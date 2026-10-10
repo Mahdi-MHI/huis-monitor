@@ -18,7 +18,7 @@ import httpx
 
 from huis_monitor.areas import Buurt, fetch_all_buurten
 from huis_monitor.criteria import METRICS
-from huis_monitor.figures import CRIMES
+from huis_monitor.figures import CRIMES, GROUPS
 from huis_monitor.stats import (
     NeighbourhoodStats,
     StatsError,
@@ -30,6 +30,25 @@ ATTEMPTS = 3
 PAUSE_SECONDS = 5.0
 # Crime figures: name of the count behind each "per 1,000" figure.
 CRIME_COUNTS = {figure.metric: figure.metric.removesuffix("_per_1000") for figure in CRIMES}
+
+
+def catalogue() -> dict:
+    """Names and labels of the figures, so the website needs no copy of them."""
+    return {
+        "groups": [
+            {
+                "title": group.title,
+                "figures": [
+                    {"metric": figure.metric, "label": figure.label} for figure in group.figures
+                ],
+            }
+            for group in GROUPS
+        ],
+        "crimes": [
+            {"metric": figure.metric, "label": figure.label, "count": CRIME_COUNTS[figure.metric]}
+            for figure in CRIMES
+        ],
+    }
 
 
 def crime_count(stats: NeighbourhoodStats, name: str) -> int | None:
@@ -179,6 +198,7 @@ def export_site_data(
             "crime_year": int(period[:4]),
             "complete": only_gemeenten is None and not failed,
             "average": average_of(everything),
+            **catalogue(),
             "gemeenten": index_entries,
         },
     )
