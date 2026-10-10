@@ -3,6 +3,7 @@
 python -m huis_monitor address "Markt 87 Delft"
 python -m huis_monitor area Delft --radius 15
 python -m huis_monitor find Delft --radius 15
+python -m huis_monitor export --out site/data
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import httpx
 
 from huis_monitor.areas import TIMEOUT_SECONDS, AreaError, find_buurten_within, find_centre
 from huis_monitor.criteria import CriteriaError, load_limits
+from huis_monitor.export import export_site_data
 from huis_monitor.geocode import GeocodeError, geocode
 from huis_monitor.search import assess_area
 from huis_monitor.stats import NeighbourhoodStats, StatsError, fetch_stats
@@ -150,6 +152,17 @@ def run_find(town: str, radius_km: float, criteria_path: Path) -> None:
             print(f"  {metric:<34}{count:>5}")
 
 
+def run_export(out_dir: Path, gemeenten: list[str]) -> int:
+    with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
+        failed = export_site_data(out_dir, client, set(gemeenten) or None, _report_progress)
+
+    print(f"Data files written to {out_dir}")
+    if failed:
+        print(f"Could not read {len(failed)} gemeenten: {', '.join(failed)}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="huis_monitor",
@@ -175,14 +188,26 @@ def main(argv: list[str] | None = None) -> int:
         help="file with the limits (default: criteria.toml)",
     )
 
+    export = commands.add_parser("export", help="write the data files for the website")
+    export.add_argument("--out", type=Path, default=Path("site/data"), help="output folder")
+    export.add_argument(
+        "--gemeente",
+        action="append",
+        default=[],
+        metavar="CODE",
+        help="only this gemeente, for example GM0503 (may be repeated; default: all)",
+    )
+
     args = parser.parse_args(argv)
     try:
         if args.command == "address":
             run_address(args.address)
         elif args.command == "area":
             run_area(args.town, args.radius, args.list)
-        else:
+        elif args.command == "find":
             run_find(args.town, args.radius, args.criteria)
+        else:
+            return run_export(args.out, args.gemeente)
     except (GeocodeError, StatsError, AreaError, CriteriaError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
