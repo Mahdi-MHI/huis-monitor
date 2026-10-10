@@ -44,13 +44,24 @@ class Limit:
 
 @dataclass(frozen=True)
 class Verdict:
-    """Outcome for one neighbourhood; ``failures`` maps metric to the reason."""
+    """Outcome for one neighbourhood.
+
+    ``failures`` maps each figure that breaks its limit to the reason.
+    ``missing`` lists the limited figures for which CBS publishes no value.
+    """
 
     failures: dict[str, str]
+    missing: tuple[str, ...] = ()
 
     @property
     def passed(self) -> bool:
-        return not self.failures
+        """Every limit was checked and met."""
+        return not self.failures and not self.missing
+
+    @property
+    def unknown(self) -> bool:
+        """No limit is broken, but some figures could not be checked."""
+        return not self.failures and bool(self.missing)
 
 
 def load_limits(path: Path) -> list[Limit]:
@@ -78,14 +89,15 @@ def load_limits(path: Path) -> list[Limit]:
 
 
 def evaluate(stats: NeighbourhoodStats, limits: list[Limit]) -> Verdict:
-    """Check every limit. A figure CBS does not publish counts as a failure."""
+    """Check every limit; figures without a value are reported as missing."""
     failures: dict[str, str] = {}
+    missing: list[str] = []
     for limit in limits:
         actual = METRICS[limit.metric](stats)
         if actual is None:
-            failures[limit.metric] = "no data"
+            missing.append(limit.metric)
         elif limit.kind == "max" and actual > limit.value:
             failures[limit.metric] = f"{actual:g} is above the maximum {limit.value:g}"
         elif limit.kind == "min" and actual < limit.value:
             failures[limit.metric] = f"{actual:g} is below the minimum {limit.value:g}"
-    return Verdict(failures=failures)
+    return Verdict(failures=failures, missing=tuple(missing))

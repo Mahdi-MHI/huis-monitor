@@ -65,6 +65,7 @@ def test_neighbourhood_inside_all_limits_passes():
     verdict = evaluate(GOOD, LIMITS)
 
     assert verdict.passed
+    assert not verdict.unknown
     assert verdict.failures == {}
 
 
@@ -81,10 +82,21 @@ def test_value_below_minimum_fails():
     assert verdict.failures == {"owner_occupied_pct": "20 is below the minimum 40"}
 
 
-def test_missing_figure_fails_as_no_data():
+def test_missing_figure_is_unknown_not_rejected():
     verdict = evaluate(replace(GOOD, owner_occupied_pct=None), LIMITS)
 
-    assert verdict.failures == {"owner_occupied_pct": "no data"}
+    assert verdict.failures == {}
+    assert verdict.missing == ("owner_occupied_pct",)
+    assert verdict.unknown
+    assert not verdict.passed
+
+
+def test_broken_limit_outweighs_missing_figure():
+    verdict = evaluate(replace(GOOD, owner_occupied_pct=None, burglaries=7), LIMITS)
+
+    assert not verdict.unknown
+    assert not verdict.passed
+    assert list(verdict.failures) == ["burglaries_per_1000"]
 
 
 def test_value_equal_to_limit_passes():

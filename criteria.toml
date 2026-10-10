@@ -2,7 +2,8 @@
 #
 # Write   min_<figure> = number   or   max_<figure> = number.
 # Delete a line, or put # in front of it, to switch that limit off.
-# A neighbourhood without data for a limited figure is rejected.
+# A neighbourhood without data for a limited figure is not rejected: it is
+# listed separately, so you can check it yourself.
 #
 # Figures you can limit:
 #   residents                        number of residents
