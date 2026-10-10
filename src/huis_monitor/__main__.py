@@ -93,39 +93,59 @@ def _report_progress(gemeente: str, number: int, total: int) -> None:
     print(f"  reading {gemeente} ({number}/{total})", file=sys.stderr)
 
 
+def _print_table(items: list, with_missing: bool) -> None:
+    print(
+        f"{'Code':<12}{'Km':>5}  {'Gemeente':<22}{'Buurt':<30}"
+        f"{'Burgl':>6}{'Viol':>6}{'Owner%':>8}{'LowInc%':>9}{'WOZ':>10}"
+        + ("  No data for" if with_missing else "")
+    )
+    for item in items:
+        buurt, stats = item.buurt, item.stats
+        figures = (
+            " " * 39
+            if stats is None
+            else f"{_show(stats.per_1000(stats.burglaries)):>6}"
+            f"{_show(stats.per_1000(stats.violent_crimes)):>6}"
+            f"{_show(stats.owner_occupied_pct):>8}"
+            f"{_show(stats.lowest40_income_households_pct):>9}"
+            f"{_show(stats.avg_woz_eur, '{:,}'):>10}"
+        )
+        missing = "  " + ", ".join(item.verdict.missing) if with_missing else ""
+        print(
+            f"{buurt.code:<12}{buurt.distance_km:>5.1f}  "
+            f"{buurt.gemeente_name[:21]:<22}{buurt.name[:29]:<30}{figures}{missing}"
+        )
+
+
 def run_find(town: str, radius_km: float, criteria_path: Path) -> None:
     limits = load_limits(criteria_path)
     with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
         centre, assessments = assess_area(town, radius_km, limits, client, _report_progress)
 
     passed = [item for item in assessments if item.verdict.passed]
+    unknown = [item for item in assessments if item.verdict.unknown]
     print(f"Centre: {centre.name}")
     print(
-        f"{len(passed)} of {len(assessments)} neighbourhoods within {radius_km:g} km "
-        f"meet the criteria in {criteria_path}"
+        f"{len(assessments)} neighbourhoods within {radius_km:g} km, "
+        f"checked with {criteria_path}"
     )
-    print()
+    print(f"  {len(passed):>4} meet every limit")
+    print(f"  {len(unknown):>4} break no limit, but lack data for some figures")
+    print(f"  {len(assessments) - len(passed) - len(unknown):>4} rejected")
 
-    print(
-        f"{'Code':<12}{'Km':>5}  {'Gemeente':<22}{'Buurt':<30}"
-        f"{'Burgl':>6}{'Viol':>6}{'Owner%':>8}{'LowInc%':>9}{'WOZ':>10}"
-    )
-    for item in passed:
-        buurt, stats = item.buurt, item.stats
-        print(
-            f"{buurt.code:<12}{buurt.distance_km:>5.1f}  "
-            f"{buurt.gemeente_name[:21]:<22}{buurt.name[:29]:<30}"
-            f"{_show(stats.per_1000(stats.burglaries)):>6}"
-            f"{_show(stats.per_1000(stats.violent_crimes)):>6}"
-            f"{_show(stats.owner_occupied_pct):>8}"
-            f"{_show(stats.lowest40_income_households_pct):>9}"
-            f"{_show(stats.avg_woz_eur, '{:,}'):>10}"
-        )
+    print()
+    print("MEET EVERY LIMIT")
+    _print_table(passed, with_missing=False)
+
+    if unknown:
+        print()
+        print("BREAK NO LIMIT, BUT DATA IS MISSING (check these yourself)")
+        _print_table(unknown, with_missing=True)
 
     reasons = Counter(metric for item in assessments for metric in item.verdict.failures)
     if reasons:
         print()
-        print("Why neighbourhoods were rejected (one can fail several limits)")
+        print("Why neighbourhoods were rejected (one can break several limits)")
         for metric, count in reasons.most_common():
             print(f"  {metric:<34}{count:>5}")
 

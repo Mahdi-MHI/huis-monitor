@@ -78,4 +78,5 @@ def test_assesses_every_buurt_and_reads_each_gemeente_once(monkeypatch):
         ("BU_C", False),
     ]
     assert assessments[2].stats is None
-    assert assessments[2].verdict.failures == {"figures": "no data"}
+    assert assessments[2].verdict.unknown
+    assert assessments[2].verdict.missing == ("figures",)

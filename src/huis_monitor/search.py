@@ -50,7 +50,7 @@ def assess_area(
     for buurt in buurten:
         stats = all_stats.get(buurt.code)
         if stats is None:
-            verdict = Verdict(failures={"figures": "no data"})
+            verdict = Verdict(failures={}, missing=("figures",))
         else:
             verdict = evaluate(stats, limits)
         assessments.append(Assessment(buurt=buurt, stats=stats, verdict=verdict))
