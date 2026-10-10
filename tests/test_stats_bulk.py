@@ -116,3 +116,57 @@ def test_large_gemeente_is_read_wijk_by_wijk(monkeypatch):
 def test_server_error_raises():
     with pytest.raises(StatsError, match="CBS request failed"):
         fetch_stats_for_gemeente("GM0503", make_client(status=500))
+
+
+def test_shares_and_other_crime_types_are_filled_in():
+    row = {
+        **kerncijfers("BU05031104", 2000),
+        "Mannen_6": 1100,
+        "Vrouwen_7": 900,
+        "k_65JaarOfOuder_12": 300,
+        "HuishoudensTotaal_29": 1000,
+        "Eenpersoonshuishoudens_30": 550,
+        "InBezitWoningcorporatie_49": 26,
+        "BasisonderwijsVmboMbo1_67": None,
+        "HavoVwoMbo24_68": None,
+        "HboWo_69": None,
+    }
+    older = {
+        **kerncijfers("BU05031104", 1900, income=34.3),
+        "BasisonderwijsVmboMbo1_67": 200,
+        "HavoVwoMbo24_68": 300,
+        "HboWo_69": 500,
+    }
+    crimes = [
+        crime("BU05031104", "1.1.1", "       2"),
+        crime("BU05031104", "1.1.2", "       1"),
+        crime("BU05031104", "1.2.1", "       5"),
+        crime("BU05031104", "1.2.5", "       4"),
+        crime("BU05031104", "1.6.1", "       0"),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/Perioden"):
+            rows = PERIODS
+        elif "86165NED" in path:
+            rows = [row]
+        elif "85984NED" in path:
+            rows = [older]
+        else:
+            rows = crimes
+        return httpx.Response(200, json={"value": rows})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    centrum = fetch_stats_for_gemeente("GM0503", client)["BU05031104"]
+
+    assert centrum.shares["men_pct"] == 55.0
+    assert centrum.shares["age_65_plus_pct"] == 15.0
+    assert centrum.shares["single_households_pct"] == 55.0
+    assert centrum.shares["rental_association_pct"] == 26
+    assert centrum.shares["education_high_pct"] == 50.0
+    assert centrum.shares["married_pct"] is None
+    assert centrum.burglaries == 3  # home plus garage or shed
+    assert centrum.other_crimes["vehicle_thefts"] == 9
+    assert centrum.other_crimes["arson"] == 0
+    assert centrum.other_crimes["pickpocketing"] is None

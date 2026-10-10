@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -32,25 +32,70 @@ COL_OWNER_OCCUPIED = "Koopwoningen_47"
 COL_INCOME = "GemiddeldInkomenPerInwoner_78"
 COL_LOW_INCOME = "k_40HuishoudensMetLaagsteInkomen_84"
 COL_URBANITY = "MateVanStedelijkheid_120"
-KERNCIJFERS_COLUMNS = (
-    COL_RESIDENTS,
-    COL_ORIGIN_NL,
-    COL_ORIGIN_EUROPE,
-    COL_ORIGIN_OUTSIDE_EUROPE,
-    COL_DENSITY,
-    COL_WOZ,
-    COL_OWNER_OCCUPIED,
-    COL_INCOME,
-    COL_LOW_INCOME,
-    COL_URBANITY,
+COL_HOUSEHOLDS = "HuishoudensTotaal_29"
+COL_EDUCATION = ("BasisonderwijsVmboMbo1_67", "HavoVwoMbo24_68", "HboWo_69")
+
+# Shares shown as percentages: figure name -> (CBS column, what it is a share of).
+# "residents", "households" and "education" mean the column holds a count that
+# is divided by that total; None means CBS already publishes a percentage.
+SHARE_COLUMNS: dict[str, tuple[str, str | None]] = {
+    "age_0_14_pct": ("k_0Tot15Jaar_8", "residents"),
+    "age_15_24_pct": ("k_15Tot25Jaar_9", "residents"),
+    "age_25_44_pct": ("k_25Tot45Jaar_10", "residents"),
+    "age_45_64_pct": ("k_45Tot65Jaar_11", "residents"),
+    "age_65_plus_pct": ("k_65JaarOfOuder_12", "residents"),
+    "men_pct": ("Mannen_6", "residents"),
+    "women_pct": ("Vrouwen_7", "residents"),
+    "unmarried_pct": ("Ongehuwd_13", "residents"),
+    "married_pct": ("Gehuwd_14", "residents"),
+    "divorced_pct": ("Gescheiden_15", "residents"),
+    "widowed_pct": ("Verweduwd_16", "residents"),
+    "single_households_pct": ("Eenpersoonshuishoudens_30", "households"),
+    "households_without_children_pct": ("HuishoudensZonderKinderen_31", "households"),
+    "households_with_children_pct": ("HuishoudensMetKinderen_32", "households"),
+    "rental_association_pct": ("InBezitWoningcorporatie_49", None),
+    "rental_other_pct": ("InBezitOverigeVerhuurders_50", None),
+    "education_basic_pct": (COL_EDUCATION[0], "education"),
+    "education_secondary_pct": (COL_EDUCATION[1], "education"),
+    "education_high_pct": (COL_EDUCATION[2], "education"),
+}
+
+KERNCIJFERS_COLUMNS = tuple(
+    dict.fromkeys(
+        (
+            COL_RESIDENTS,
+            COL_ORIGIN_NL,
+            COL_ORIGIN_EUROPE,
+            COL_ORIGIN_OUTSIDE_EUROPE,
+            COL_DENSITY,
+            COL_WOZ,
+            COL_OWNER_OCCUPIED,
+            COL_INCOME,
+            COL_LOW_INCOME,
+            COL_URBANITY,
+            COL_HOUSEHOLDS,
+            *(column for column, _ in SHARE_COLUMNS.values()),
+        )
+    )
 )
 
+# Police crime codes behind each figure.
 CRIME_TOTAL = "0.0.0"
-CRIME_BURGLARY = "1.1.1"
+# Theft or burglary in a home, garage, shed or garden house.
+CRIME_BURGLARY = ("1.1.1", "1.1.2")
 CRIME_BIKE_THEFT = "1.2.3"
 CRIME_VANDALISM = "2.2.1"
-# Murder, public violence, threat, assault, street robbery, hold-up.
-CRIME_VIOLENT = ("1.4.2", "1.4.3", "1.4.4", "1.4.5", "1.4.6", "1.4.7")
+# Sexual offence (often withheld by CBS), murder, public violence, threat,
+# assault, street robbery, hold-up.
+CRIME_VIOLENT = ("1.4.1", "1.4.2", "1.4.3", "1.4.4", "1.4.5", "1.4.6", "1.4.7")
+OTHER_CRIMES: dict[str, tuple[str, ...]] = {
+    "vehicle_thefts": ("1.2.1", "1.2.2", "1.2.5", "1.5.2"),
+    "pickpocketing": ("1.2.4",),
+    "traffic_accidents": ("1.3.1",),
+    "arson": ("1.6.1",),
+    "drug_nuisance": ("2.1.1",),
+    "trespassing": ("2.4.2",),
+}
 
 
 class StatsError(Exception):
@@ -78,6 +123,10 @@ class NeighbourhoodStats:
     violent_crimes: int | None
     vandalism: int | None
     bike_thefts: int | None
+    # Percentages by figure name (see SHARE_COLUMNS) and counts of the crime
+    # types in OTHER_CRIMES. Empty when the figures were not read.
+    shares: dict[str, float | None] = field(default_factory=dict)
+    other_crimes: dict[str, int | None] = field(default_factory=dict)
 
     def per_1000(self, count: int | None) -> float | None:
         """Express a count per 1,000 residents."""
@@ -148,7 +197,17 @@ def _build(
     buurt_code: str, figures: dict, crime_year: int | None, crimes: dict[str, int]
 ) -> NeighbourhoodStats:
     residents = _as_int(figures[COL_RESIDENTS])
-    violent = [crimes[code] for code in CRIME_VIOLENT if crimes.get(code) is not None]
+    education = [figures[column] for column in COL_EDUCATION]
+    totals = {
+        "residents": residents,
+        "households": figures[COL_HOUSEHOLDS],
+        "education": None if None in education else sum(education),
+    }
+    shares = {}
+    for name, (column, total) in SHARE_COLUMNS.items():
+        value = figures[column]
+        shares[name] = value if total is None else _share(value, totals[total])
+
     return NeighbourhoodStats(
         buurt_code=buurt_code,
         residents=residents,
@@ -163,11 +222,19 @@ def _build(
         urbanity=_as_int(figures[COL_URBANITY]),
         crime_year=crime_year,
         crimes_total=crimes.get(CRIME_TOTAL),
-        burglaries=crimes.get(CRIME_BURGLARY),
-        violent_crimes=sum(violent) if violent else None,
+        burglaries=_sum_crimes(crimes, CRIME_BURGLARY),
+        violent_crimes=_sum_crimes(crimes, CRIME_VIOLENT),
         vandalism=crimes.get(CRIME_VANDALISM),
         bike_thefts=crimes.get(CRIME_BIKE_THEFT),
+        shares=shares,
+        other_crimes={name: _sum_crimes(crimes, codes) for name, codes in OTHER_CRIMES.items()},
     )
+
+
+def _sum_crimes(crimes: dict[str, int], codes: tuple[str, ...]) -> int | None:
+    """Add up the counts of several crime codes; ``None`` if none is published."""
+    counts = [crimes[code] for code in codes if crimes.get(code) is not None]
+    return sum(counts) if counts else None
 
 
 def _get_rows(client: httpx.Client, url: str, params: dict[str, str] | None = None) -> list[dict]:
