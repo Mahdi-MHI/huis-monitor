@@ -147,11 +147,12 @@ def fetch_stats(buurt_code: str, client: httpx.Client | None = None) -> Neighbou
 
 
 def fetch_stats_for_gemeente(
-    gemeente_code: str, client: httpx.Client
+    gemeente_code: str, client: httpx.Client, period: str | None = None
 ) -> dict[str, NeighbourhoodStats]:
     """Return the key figures of every buurt in a gemeente, keyed by buurt code.
 
-    ``gemeente_code`` may be written as "GM0503" or "0503".
+    ``gemeente_code`` may be written as "GM0503" or "0503". ``period`` is the
+    crime period to read (see ``latest_crime_period``); by default the latest.
     """
     prefix = "BU" + gemeente_code.removeprefix("GM")
 
@@ -173,7 +174,8 @@ def fetch_stats_for_gemeente(
     else:
         prefixes = sorted({code[:8] for code in figures})
 
-    period = _latest_crime_period(client)
+    if period is None:
+        period = latest_crime_period(client)
     crime_year = int(period[:4])
     crimes: dict[str, dict[str, int]] = {}
     for crime_prefix in prefixes:
@@ -256,7 +258,8 @@ def _get_rows_by_url(client: httpx.Client, url: str) -> list[dict]:
     return _get_rows(client, f"{url}&$format=json")
 
 
-def _latest_crime_period(client: httpx.Client) -> str:
+def latest_crime_period(client: httpx.Client) -> str:
+    """Return the newest period of the crime table, for example "2025JJ00"."""
     periods = _get_rows(client, f"{CRIME_PERIODS_URL}?$format=json")
     if not periods:
         raise StatsError("CBS lists no periods for the crime figures")

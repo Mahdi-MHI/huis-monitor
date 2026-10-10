@@ -143,3 +143,19 @@ def test_buurt_gets_an_outline_in_longitude_and_latitude():
     latitudes = [lat for _, lat in ring]
     assert min(longitudes) < 5.38721 < max(longitudes)
     assert min(latitudes) < 52.15517 < max(latitudes)
+
+
+def test_fetch_all_buurten_reads_every_page_without_a_box(monkeypatch):
+    monkeypatch.setattr(areas, "PAGE_SIZE", 2)
+    seen: list = []
+    pages = [
+        [feature("BU_B", 84_000, 447_000), feature("BU_A", 84_100, 447_000)],
+        [feature("BU_WATER", 84_200, 447_000, water="JA")],
+    ]
+
+    buurten = areas.fetch_all_buurten(wfs_client(pages, seen))
+
+    assert [b.code for b in buurten] == ["BU_A", "BU_B"]
+    assert all("bbox" not in query for query in seen)
+    assert buurten[0].distance_km == 0.0
+    assert 51.9 < buurten[0].lat < 52.1 and 4.2 < buurten[0].lon < 4.5

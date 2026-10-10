@@ -52,6 +52,8 @@ class Buurt:
     residents: int | None
     distance_km: float
     outline: tuple[tuple[tuple[float, float], ...], ...] = ()
+    lat: float = 0.0
+    lon: float = 0.0
 
 
 def find_centre(town: str, client: httpx.Client) -> Centre:
@@ -104,14 +106,34 @@ def find_buurten_within(centre: Centre, radius_km: float, client: httpx.Client) 
     return sorted(found.values(), key=lambda buurt: (buurt.distance_km, buurt.code))
 
 
-def _fetch_page(client: httpx.Client, bbox: str, start: int) -> list[dict]:
+def fetch_all_buurten(client: httpx.Client) -> list[Buurt]:
+    """Return every buurt in the Netherlands, sorted by code.
+
+    There is no centre here, so ``distance_km`` is 0 for all of them.
+    """
+    found: dict[str, Buurt] = {}
+    start = 0
+    while True:
+        features = _fetch_page(client, None, start)
+        for feature in features:
+            buurt = _to_buurt(feature, None)
+            if buurt is not None:
+                found[buurt.code] = buurt
+        if len(features) < PAGE_SIZE:
+            break
+        start += PAGE_SIZE
+    return sorted(found.values(), key=lambda buurt: buurt.code)
+
+
+def _fetch_page(client: httpx.Client, bbox: str | None, start: int) -> list[dict]:
     # The query string is written out by hand on purpose, so the commas in the
     # bbox are sent as plain commas: that is the form that was checked against
     # the live service. httpx's ``params`` would percent-encode them.
     url = (
         f"{BUURTEN_WFS_URL}?service=WFS&version=2.0.0&request=GetFeature"
-        f"&typeName=wijkenbuurten:buurten&bbox={bbox}"
-        f"&count={PAGE_SIZE}&startIndex={start}&outputFormat=application/json"
+        f"&typeName=wijkenbuurten:buurten"
+        + (f"&bbox={bbox}" if bbox else "")
+        + f"&count={PAGE_SIZE}&startIndex={start}&outputFormat=application/json"
     )
     try:
         response = client.get(url)
@@ -121,13 +143,15 @@ def _fetch_page(client: httpx.Client, bbox: str, start: int) -> list[dict]:
         raise AreaError(f"PDOK neighbourhood map request failed: {exc}") from exc
 
 
-def _to_buurt(feature: dict, centre: Centre) -> Buurt | None:
+def _to_buurt(feature: dict, centre: Centre | None) -> Buurt | None:
     """Convert a map feature; water and foreign areas give ``None``."""
     props = feature["properties"]
     if props.get("water") != "NEE":
         return None
 
     x, y = _centroid(feature["geometry"])
+    lat, lon = rd_to_wgs84(x, y)
+    distance_m = 0.0 if centre is None else math.hypot(x - centre.x, y - centre.y)
     residents = props.get("aantalInwoners")
     return Buurt(
         code=props["buurtcode"],
@@ -135,8 +159,10 @@ def _to_buurt(feature: dict, centre: Centre) -> Buurt | None:
         gemeente_code=props["gemeentecode"],
         gemeente_name=props["gemeentenaam"],
         residents=None if residents is None or residents < NO_DATA else int(residents),
-        distance_km=round(math.hypot(x - centre.x, y - centre.y) / 1000, 1),
+        distance_km=round(distance_m / 1000, 1),
         outline=_outline(feature["geometry"]),
+        lat=round(lat, 5),
+        lon=round(lon, 5),
     )
 
 
