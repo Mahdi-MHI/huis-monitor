@@ -1,10 +1,17 @@
-"""Command line entry point: python -m huis_monitor "Markt 87 Delft"."""
+"""Command line entry point.
+
+python -m huis_monitor address "Markt 87 Delft"
+python -m huis_monitor area Delft --radius 15
+"""
 
 from __future__ import annotations
 
 import argparse
 import sys
 
+import httpx
+
+from huis_monitor.areas import TIMEOUT_SECONDS, AreaError, find_buurten_within, find_centre
 from huis_monitor.geocode import GeocodeError, geocode
 from huis_monitor.stats import NeighbourhoodStats, StatsError, fetch_stats
 
@@ -39,20 +46,9 @@ def format_stats(stats: NeighbourhoodStats) -> str:
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="huis_monitor",
-        description="Show the neighbourhood (buurt) of a Dutch address and its key figures.",
-    )
-    parser.add_argument("address", help='for example "Markt 87 Delft"')
-    args = parser.parse_args(argv)
-
-    try:
-        location = geocode(args.address)
-        stats = fetch_stats(location.buurt_code)
-    except (GeocodeError, StatsError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+def run_address(address: str) -> None:
+    location = geocode(address)
+    stats = fetch_stats(location.buurt_code)
 
     print(f"Address : {location.address}")
     print(f"Buurt   : {location.buurt_name} ({location.buurt_code})")
@@ -60,6 +56,58 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Gemeente: {location.gemeente_name} ({location.gemeente_code})")
     print()
     print(format_stats(stats))
+
+
+def run_area(town: str, radius_km: float, show_all: bool) -> None:
+    with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
+        centre = find_centre(town, client)
+        buurten = find_buurten_within(centre, radius_km, client)
+
+    print(f"Centre: {centre.name}")
+    print(f"Found {len(buurten)} neighbourhoods within {radius_km:g} km")
+    print()
+
+    per_gemeente: dict[str, list] = {}
+    for buurt in buurten:
+        per_gemeente.setdefault(buurt.gemeente_name, []).append(buurt)
+    print(f"{'Gemeente':<28}{'Buurten':>8}{'Nearest':>10}")
+    for name, group in sorted(per_gemeente.items(), key=lambda item: item[1][0].distance_km):
+        print(f"{name:<28}{len(group):>8}{group[0].distance_km:>7.1f} km")
+
+    if show_all:
+        print()
+        print(f"{'Code':<12}{'Km':>5}  {'Gemeente':<26}Buurt")
+        for buurt in buurten:
+            print(
+                f"{buurt.code:<12}{buurt.distance_km:>5.1f}  "
+                f"{buurt.gemeente_name:<26}{buurt.name}"
+            )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="huis_monitor",
+        description="Explore Dutch neighbourhoods (buurten) and their key figures.",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    address = commands.add_parser("address", help="show the figures for one address")
+    address.add_argument("address", help='for example "Markt 87 Delft"')
+
+    area = commands.add_parser("area", help="list the neighbourhoods around a town")
+    area.add_argument("town", help="for example Delft")
+    area.add_argument("--radius", type=float, default=15.0, help="in km (default: 15)")
+    area.add_argument("--list", action="store_true", help="also print every neighbourhood")
+
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "address":
+            run_address(args.address)
+        else:
+            run_area(args.town, args.radius, args.list)
+    except (GeocodeError, StatsError, AreaError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
