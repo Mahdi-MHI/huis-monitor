@@ -127,3 +127,19 @@ def test_map_server_error_raises():
 
     with pytest.raises(AreaError, match="map request failed"):
         find_buurten_within(CENTRE, 5, client)
+
+
+def test_buurt_gets_an_outline_in_longitude_and_latitude():
+    page = [feature("BU_A", 155_000, 463_000)]  # the origin of the Dutch grid
+
+    centre = Centre("Amersfoort", 155_000.0, 463_000.0)
+
+    buurt = find_buurten_within(centre, 5, wfs_client([page]))[0]
+
+    assert len(buurt.outline) == 1
+    ring = buurt.outline[0]
+    assert len(ring) == 5 and ring[0] == ring[-1]
+    longitudes = [lon for lon, _ in ring]
+    latitudes = [lat for _, lat in ring]
+    assert min(longitudes) < 5.38721 < max(longitudes)
+    assert min(latitudes) < 52.15517 < max(latitudes)

@@ -9,6 +9,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from huis_monitor.geo import rd_to_wgs84
+
 PDOK_SEARCH_URL = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free"
 BUURTEN_WFS_URL = "https://service.pdok.nl/cbs/wijkenbuurten/2025/wfs/v1_0"
 PAGE_SIZE = 1000
@@ -30,10 +32,18 @@ class Centre:
     x: float
     y: float
 
+    @property
+    def lat_lon(self) -> tuple[float, float]:
+        return rd_to_wgs84(self.x, self.y)
+
 
 @dataclass(frozen=True)
 class Buurt:
-    """A neighbourhood and its distance to the chosen centre."""
+    """A neighbourhood and its distance to the chosen centre.
+
+    ``outline`` holds the border for drawing on a map: one ring per polygon,
+    each ring a tuple of ``(longitude, latitude)`` points.
+    """
 
     code: str
     name: str
@@ -41,6 +51,7 @@ class Buurt:
     gemeente_name: str
     residents: int | None
     distance_km: float
+    outline: tuple[tuple[tuple[float, float], ...], ...] = ()
 
 
 def find_centre(town: str, client: httpx.Client) -> Centre:
@@ -125,14 +136,32 @@ def _to_buurt(feature: dict, centre: Centre) -> Buurt | None:
         gemeente_name=props["gemeentenaam"],
         residents=None if residents is None or residents < NO_DATA else int(residents),
         distance_km=round(math.hypot(x - centre.x, y - centre.y) / 1000, 1),
+        outline=_outline(feature["geometry"]),
     )
+
+
+def _polygons(geometry: dict) -> list:
+    """Return the polygons of a Polygon or MultiPolygon geometry."""
+    if geometry["type"] == "Polygon":
+        return [geometry["coordinates"]]
+    return geometry["coordinates"]
+
+
+def _outline(geometry: dict) -> tuple[tuple[tuple[float, float], ...], ...]:
+    """Outer border of every polygon as (longitude, latitude) points."""
+    rings = []
+    for polygon in _polygons(geometry):
+        ring = []
+        for x, y in polygon[0]:
+            lat, lon = rd_to_wgs84(x, y)
+            ring.append((round(lon, 5), round(lat, 5)))
+        rings.append(tuple(ring))
+    return tuple(rings)
 
 
 def _centroid(geometry: dict) -> tuple[float, float]:
     """Centre of gravity of the largest polygon in a (Multi)Polygon."""
-    polygons = geometry["coordinates"]
-    if geometry["type"] == "Polygon":
-        polygons = [polygons]
+    polygons = _polygons(geometry)
 
     best_area = -1.0
     best_point = (0.0, 0.0)
