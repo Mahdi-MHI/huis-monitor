@@ -94,8 +94,9 @@ def find_buurten_within(centre: Centre, radius_km: float, client: httpx.Client) 
 
 
 def _fetch_page(client: httpx.Client, bbox: str, start: int) -> list[dict]:
-    # The query string is written out by hand on purpose: this server ignores
-    # the bbox when its commas are percent-encoded, which httpx's ``params`` does.
+    # The query string is written out by hand on purpose, so the commas in the
+    # bbox are sent as plain commas: that is the form that was checked against
+    # the live service. httpx's ``params`` would percent-encode them.
     url = (
         f"{BUURTEN_WFS_URL}?service=WFS&version=2.0.0&request=GetFeature"
         f"&typeName=wijkenbuurten:buurten&bbox={bbox}"
