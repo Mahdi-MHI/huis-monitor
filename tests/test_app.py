@@ -44,6 +44,8 @@ def figures(code: str, owner_occupied: float | None, burglaries: int) -> Neighbo
         violent_crimes=5,
         vandalism=4,
         bike_thefts=6,
+        shares={"men_pct": 49.0, "women_pct": 51.0, "age_0_14_pct": 20.0},
+        other_crimes={"arson": 1},
     )
 
 
@@ -64,60 +66,68 @@ AREA = AreaData(
 CRITERIA = "[limits]\nmax_burglaries_per_1000 = 3\nmin_owner_occupied_pct = 40\n"
 
 
-@pytest.fixture
-def app(monkeypatch, tmp_path):
-    """The app with fake data, started in a folder holding a criteria file."""
-    (tmp_path / "criteria.toml").write_text(CRITERIA)
-    monkeypatch.chdir(tmp_path)
+def start(monkeypatch, folder) -> AppTest:
+    """Start the app with fake data in ``folder`` and press the load button."""
+    monkeypatch.chdir(folder)
     monkeypatch.setattr(search, "load_area", lambda town, radius_km, client: AREA)
     st.cache_data.clear()  # the app remembers areas; start every test fresh
     app = AppTest.from_file(APP, default_timeout=30)
     app.run()
-    return app
-
-
-def load(app: AppTest) -> AppTest:
+    assert "Choose a town" in app.info[0].value
     app.sidebar.button[0].click().run()
     assert not app.exception
     return app
+
+
+@pytest.fixture
+def app(monkeypatch, tmp_path):
+    """The loaded app, started in a folder that holds a criteria file."""
+    (tmp_path / "criteria.toml").write_text(CRITERIA)
+    return start(monkeypatch, tmp_path)
 
 
 def counts(app: AppTest) -> dict[str, str]:
     return {metric.label: metric.value for metric in app.metric}
 
 
-def test_starts_by_asking_for_an_area(app):
-    assert not app.exception
-    assert "Choose a town" in app.info[0].value
-    assert len(app.metric) == 0
+def tables_with(app: AppTest, column: str) -> list:
+    return [frame.value for frame in app.dataframe if column in frame.value.columns]
 
 
 def test_groups_neighbourhoods_using_the_criteria_file(app):
-    load(app)
-
     assert counts(app) == {"Meets every limit": "1", "Data missing": "1", "Rejected": "1"}
-    passed, missing, reasons, rejected = (frame.value for frame in app.dataframe)
+    passed, missing, rejected = tables_with(app, "Buurt")
     assert list(passed["Buurt"]) == ["Goodbuurt"]
-    assert list(missing["No data for"]) == ["Owner-occupied homes (%)"]
-    assert reasons.to_dict("records") == [
-        {"Limit on": "Burglaries per 1,000 residents", "Neighbourhoods": 1}
+    assert list(missing["No data for"]) == ["Owner-occupied and rental homes: Owner-occupied (%)"]
+    assert list(rejected["Breaks limit on"]) == [
+        "Theft or burglary in home, garage, shed per 1,000"
     ]
-    assert list(rejected["Breaks limit on"]) == ["Burglaries per 1,000 residents"]
+    assert tables_with(app, "Limit on")[0].to_dict("records") == [
+        {"Limit on": "Theft or burglary in home, garage, shed per 1,000", "Neighbourhoods": 1}
+    ]
 
 
-def test_changing_a_limit_regroups_at_once(app):
-    load(app)
-
-    app.sidebar.number_input(key="max_burglaries_per_1000").set_value(10.0).run()
-
-    assert not app.exception
-    assert counts(app) == {"Meets every limit": "2", "Data missing": "1", "Rejected": "0"}
+def test_criteria_file_sets_the_starting_position_of_sliders(app):
+    assert app.slider(key="range_owner_occupied_pct").value == (40, 100)
+    assert app.slider(key="range_men_pct").value == (0, 100)
 
 
-def test_removing_all_limits_accepts_everything(app):
-    load(app)
-
-    app.sidebar.multiselect[0].set_value([]).run()
+def test_widening_a_slider_removes_that_limit(app):
+    app.slider(key="range_owner_occupied_pct").set_range(0, 100).run()
 
     assert not app.exception
+    assert counts(app) == {"Meets every limit": "2", "Data missing": "0", "Rejected": "1"}
+
+
+def test_narrowing_a_slider_rejects_neighbourhoods_outside_it(app):
+    app.slider(key="range_men_pct").set_range(60, 100).run()
+
+    assert not app.exception
+    assert counts(app) == {"Meets every limit": "0", "Data missing": "0", "Rejected": "3"}
+
+
+def test_without_a_criteria_file_nothing_is_limited(monkeypatch, tmp_path):
+    app = start(monkeypatch, tmp_path)
+
     assert counts(app) == {"Meets every limit": "3", "Data missing": "0", "Rejected": "0"}
+    assert app.slider(key="range_owner_occupied_pct").value == (0, 100)
