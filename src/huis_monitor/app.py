@@ -7,7 +7,9 @@ Start it from the project folder with:
 
 from __future__ import annotations
 
+import html
 import math
+import statistics
 from collections import Counter
 from pathlib import Path
 
@@ -18,29 +20,12 @@ import streamlit as st
 
 from huis_monitor import search
 from huis_monitor.areas import TIMEOUT_SECONDS, AreaError
-from huis_monitor.criteria import METRICS, CriteriaError, Limit, load_limits
+from huis_monitor.criteria import METRICS, CriteriaError, Limit, dump_limits, load_limits
+from huis_monitor.figures import CRIMES, GROUPS, LABELS, OTHER, Figure, Group
 from huis_monitor.search import AreaData, Assessment
 from huis_monitor.stats import StatsError
 
 CRITERIA_FILE = Path("criteria.toml")
-
-LABELS = {
-    "residents": "Residents",
-    "origin_nl_pct": "Origin Netherlands (%)",
-    "origin_europe_pct": "Origin rest of Europe (%)",
-    "origin_outside_europe_pct": "Origin outside Europe (%)",
-    "density_per_km2": "Residents per km²",
-    "avg_woz_eur": "Average WOZ value (€)",
-    "owner_occupied_pct": "Owner-occupied homes (%)",
-    "avg_income_eur": "Income per resident (€)",
-    "lowest40_income_households_pct": "Low-income households (%)",
-    "urbanity": "Urbanity (1 very urban, 5 rural)",
-    "crimes_total_per_1000": "All crimes per 1,000 residents",
-    "burglaries_per_1000": "Burglaries per 1,000 residents",
-    "violent_crimes_per_1000": "Violent crimes per 1,000 residents",
-    "vandalism_per_1000": "Vandalism per 1,000 residents",
-    "bike_thefts_per_1000": "Bike thefts per 1,000 residents",
-}
 
 PASSED = "Meets every limit"
 UNKNOWN = "Data missing"
@@ -52,6 +37,14 @@ FILL = {
     UNKNOWN: [250, 178, 25, 170],
     REJECTED: [143, 143, 138, 50],
 }
+# Segment colours of the composition bars, in a fixed order, for a light and a
+# dark page. Both sets were checked for colour-blind readers.
+SEGMENT_COLOURS = {
+    "light": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"],
+    "dark": ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"],
+}
+
+Defaults = dict[str, dict[str, float]]
 
 
 @st.cache_data(ttl="12h", show_spinner=False)
@@ -68,63 +61,180 @@ def status_of(item: Assessment) -> str:
 
 
 def label_list(metrics) -> str:
-    return ", ".join(LABELS.get(metric, "all figures") for metric in metrics)
+    return "; ".join(LABELS.get(metric, "all figures") for metric in metrics)
 
 
-def default_limits() -> dict[str, dict[str, float]]:
+def default_limits() -> Defaults:
     """Limits from criteria.toml as {figure: {"min": ..., "max": ...}}."""
     if not CRITERIA_FILE.exists():
         return {}
     try:
         limits = load_limits(CRITERIA_FILE)
     except CriteriaError as exc:
-        st.sidebar.warning(f"{CRITERIA_FILE} was skipped: {exc}")
+        st.warning(f"{CRITERIA_FILE} was skipped: {exc}")
         return {}
-    defaults: dict[str, dict[str, float]] = {}
+    defaults: Defaults = {}
     for limit in limits:
         defaults.setdefault(limit.metric, {})[limit.kind] = limit.value
     return defaults
 
 
-def choose_limits(area: AreaData) -> list[Limit]:
-    """Show the limit controls in the sidebar and return the chosen limits."""
-    defaults = default_limits()
-    st.header("Limits")
-    chosen = st.multiselect(
-        "Figures to limit",
-        options=list(METRICS),
-        default=list(defaults),
-        format_func=LABELS.get,
-        help="Starts with the limits from criteria.toml. Changes here are not saved.",
+def values_of(area: AreaData, metric: str) -> list[float]:
+    """Every published value of one figure in the area."""
+    return [value for s in area.stats.values() if (value := METRICS[metric](s)) is not None]
+
+
+def area_average(area: AreaData, metric: str) -> float | None:
+    """Average of a percentage over the area, counting large neighbourhoods more."""
+    total = weight = 0.0
+    for stats in area.stats.values():
+        value = METRICS[metric](stats)
+        if value is not None and stats.residents:
+            total += value * stats.residents
+            weight += stats.residents
+    return total / weight if weight else None
+
+
+def page_theme() -> str:
+    try:
+        return "dark" if st.context.theme.type == "dark" else "light"
+    except Exception:  # noqa: BLE001 - older Streamlit versions have no theme info
+        return "light"
+
+
+def composition_bar(group: Group, averages: dict[str, float]) -> str:
+    """HTML for one bar split into the group's shares, with a legend below it."""
+    colours = SEGMENT_COLOURS[page_theme()]
+    total = sum(averages.values())
+    segments = []
+    legend = []
+    for colour, figure in zip(colours, group.figures, strict=False):
+        if figure.metric not in averages:
+            continue
+        share = averages[figure.metric]
+        text = html.escape(f"{figure.label} {share:.0f}%")
+        segments.append(
+            f'<div title="{text}" style="flex:{share / total:.4f} 1 0;'
+            f'background:{colour};border-radius:3px;"></div>'
+        )
+        legend.append(
+            '<span style="white-space:nowrap;margin-right:14px;">'
+            f'<span style="display:inline-block;width:10px;height:10px;border-radius:2px;'
+            f'background:{colour};margin-right:5px;"></span>{text}</span>'
+        )
+    return (
+        f'<div style="display:flex;gap:2px;height:26px;">{"".join(segments)}</div>'
+        f'<div style="margin-top:8px;font-size:0.85rem;line-height:1.7;">{"".join(legend)}</div>'
+    )
+
+
+def choose_shares(area: AreaData, defaults: Defaults) -> list[Limit]:
+    """Composition bars with a range slider per share; returns the chosen limits."""
+    limits: list[Limit] = []
+    columns = st.columns(2)
+    for number, group in enumerate(GROUPS):
+        averages = {
+            figure.metric: average
+            for figure in group.figures
+            if (average := area_average(area, figure.metric)) is not None
+        }
+        with columns[number % 2].container(border=True):
+            st.markdown(f"**{group.title}**")
+            if averages:
+                st.html(composition_bar(group, averages))
+            else:
+                st.caption("CBS publishes no figures for this group here.")
+            for figure in group.figures:
+                saved = defaults.get(figure.metric, {})
+                low, high = st.slider(
+                    f"{figure.label} (%)",
+                    min_value=0,
+                    max_value=100,
+                    value=(int(saved.get("min", 0)), int(saved.get("max", 100))),
+                    key=f"range_{figure.metric}",
+                )
+                if low > 0:
+                    limits.append(Limit(metric=figure.metric, kind="min", value=float(low)))
+                if high < 100:
+                    limits.append(Limit(metric=figure.metric, kind="max", value=float(high)))
+    return limits
+
+
+def _summary_row(area: AreaData, figure: Figure) -> dict:
+    values = values_of(area, figure.metric)
+    return {
+        "Figure": figure.label,
+        "Lowest here": min(values) if values else None,
+        "Typical here": statistics.median(values) if values else None,
+        "Highest here": max(values) if values else None,
+    }
+
+
+def choose_in_table(
+    area: AreaData, figures: tuple[Figure, ...], defaults: Defaults, kinds: dict[str, str], key: str
+) -> list[Limit]:
+    """A table with one row per figure and an editable column per kind of limit.
+
+    ``kinds`` maps "min" and/or "max" to the heading of its editable column.
+    """
+    rows = []
+    for figure in figures:
+        row = _summary_row(area, figure)
+        for kind, heading in kinds.items():
+            row[heading] = defaults.get(figure.metric, {}).get(kind)
+        rows.append(row)
+    table = pd.DataFrame(rows).astype({heading: "float64" for heading in kinds.values()})
+
+    edited = st.data_editor(
+        table,
+        hide_index=True,
+        width="stretch",
+        height=38 + 35 * len(rows),  # tall enough to show every row without scrolling
+        disabled=["Figure", "Lowest here", "Typical here", "Highest here"],
+        column_config={
+            "Lowest here": st.column_config.NumberColumn(format="localized"),
+            "Typical here": st.column_config.NumberColumn(format="localized"),
+            "Highest here": st.column_config.NumberColumn(format="localized"),
+            **{
+                heading: st.column_config.NumberColumn(min_value=0, format="localized")
+                for heading in kinds.values()
+            },
+        },
+        key=key,
     )
 
     limits: list[Limit] = []
-    for metric in chosen:
-        values = [value for s in area.stats.values() if (value := METRICS[metric](s)) is not None]
-        st.markdown(f"**{LABELS[metric]}**")
-        if values:
-            st.caption(f"In this area: {min(values):,g} to {max(values):,g}")
-        low_column, high_column = st.columns(2)
-        low = low_column.number_input(
-            "At least",
-            value=defaults.get(metric, {}).get("min"),
-            step=1.0,
-            format="%g",
-            placeholder="no minimum",
-            key=f"min_{metric}",
-        )
-        high = high_column.number_input(
-            "At most",
-            value=defaults.get(metric, {}).get("max"),
-            step=1.0,
-            format="%g",
-            placeholder="no maximum",
-            key=f"max_{metric}",
-        )
-        if low is not None:
-            limits.append(Limit(metric=metric, kind="min", value=float(low)))
-        if high is not None:
-            limits.append(Limit(metric=metric, kind="max", value=float(high)))
+    for figure, (_, row) in zip(figures, edited.iterrows(), strict=True):
+        for kind, heading in kinds.items():
+            if pd.notna(row[heading]):
+                limits.append(Limit(metric=figure.metric, kind=kind, value=float(row[heading])))
+    return limits
+
+
+def choose_limits(area: AreaData) -> list[Limit]:
+    """Show every limit control and return the limits that are switched on."""
+    defaults = default_limits()
+
+    st.subheader("Residents and homes")
+    st.caption(
+        "Each bar shows the average of all neighbourhoods in this area. Drag the two "
+        "ends of a slider to set the lowest and the highest share you accept. "
+        "A slider left at 0 to 100 sets no limit."
+    )
+    limits = choose_shares(area, defaults)
+
+    st.subheader("Safety")
+    st.caption(
+        "Registered crimes per 1,000 residents in the latest year. Type the highest "
+        "number you accept in the last column; leave a cell empty for no limit."
+    )
+    limits += choose_in_table(area, CRIMES, defaults, {"max": "At most"}, key="crime_limits")
+
+    st.subheader("Other figures")
+    st.caption("Type a lowest and/or a highest value; leave a cell empty for no limit.")
+    limits += choose_in_table(
+        area, OTHER, defaults, {"min": "At least", "max": "At most"}, key="other_limits"
+    )
     return limits
 
 
@@ -271,28 +381,41 @@ def main() -> None:
         st.error(str(exc))
         return
 
-    with st.sidebar:
+    st.title(f"Neighbourhoods around {query[0]}")
+    st.caption(
+        f"{len(area.buurten)} neighbourhoods within {area.radius_km:g} km of {area.centre.name}. "
+        "Figures: CBS and police open data. Borders: PDOK."
+    )
+    summary = st.container()
+    limits_tab, map_tab, passed_tab, unknown_tab, rejected_tab = st.tabs(
+        ["Limits", "Map", PASSED, UNKNOWN, REJECTED]
+    )
+    with limits_tab:
         limits = choose_limits(area)
-        if st.button("Read the figures again", help="Forget the remembered data and reload."):
-            read_area.clear()
-            st.rerun()
 
     assessments = search.assess(area, limits)
     groups: dict[str, list[Assessment]] = {PASSED: [], UNKNOWN: [], REJECTED: []}
     for item in assessments:
         groups[status_of(item)].append(item)
 
-    st.title(f"Neighbourhoods around {query[0]}")
-    st.caption(
-        f"{len(assessments)} neighbourhoods within {area.radius_km:g} km of {area.centre.name}. "
-        "Figures: CBS and police open data. Borders: PDOK."
-    )
-    for column, status in zip(st.columns(3), groups, strict=True):
-        column.metric(status, len(groups[status]))
+    with summary:
+        for column, status in zip(st.columns(3), groups, strict=True):
+            column.metric(status, len(groups[status]))
 
-    map_tab, passed_tab, unknown_tab, rejected_tab = st.tabs(
-        ["Map", PASSED, UNKNOWN, REJECTED]
-    )
+    with st.sidebar:
+        st.header("Your limits")
+        st.caption(f"{len(limits)} limits are switched on. Changes are not saved by themselves.")
+        st.download_button(
+            "Download as criteria.toml",
+            dump_limits(limits),
+            file_name="criteria.toml",
+            mime="text/plain",
+            help="Put the file in the project folder to start with these limits next time.",
+        )
+        if st.button("Read the figures again", help="Forget the remembered data and reload."):
+            read_area.clear()
+            st.rerun()
+
     with map_tab:
         show_map(area, assessments)
     with passed_tab:
