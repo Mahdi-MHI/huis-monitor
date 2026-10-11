@@ -176,6 +176,8 @@ def export_site_data(
                 "lon": buurt.lon,
                 "outline": buurt.outline,
             }
+            if buurt.postcode:
+                entry["postcode"] = buurt.postcode
             if buurt.code in stats:
                 entry["figures"] = figures_of(stats[buurt.code])
                 entry["counts"] = counts_of(stats[buurt.code])

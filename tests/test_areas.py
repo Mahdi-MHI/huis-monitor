@@ -20,7 +20,14 @@ def square(x: float, y: float, size: float = 200.0) -> dict:
     return {"type": "MultiPolygon", "coordinates": [[ring]]}
 
 
-def feature(code: str, x: float, y: float, water: str = "NEE", residents: int = 1000) -> dict:
+def feature(
+    code: str,
+    x: float,
+    y: float,
+    water: str = "NEE",
+    residents: int = 1000,
+    postcode: object = "2628",
+) -> dict:
     return {
         "type": "Feature",
         "properties": {
@@ -30,6 +37,7 @@ def feature(code: str, x: float, y: float, water: str = "NEE", residents: int = 
             "gemeentenaam": "Delft",
             "water": water,
             "aantalInwoners": residents,
+            "meestVoorkomendePostcode": postcode,
         },
         "geometry": square(x, y),
     }
@@ -159,3 +167,15 @@ def test_fetch_all_buurten_reads_every_page_without_a_box(monkeypatch):
     assert all("bbox" not in query for query in seen)
     assert buurten[0].distance_km == 0.0
     assert 51.9 < buurten[0].lat < 52.1 and 4.2 < buurten[0].lon < 4.5
+
+
+def test_buurt_keeps_its_four_digit_postcode_and_drops_no_data_markers():
+    page = [
+        feature("BU_A", 84_000, 447_000, postcode="2611"),
+        feature("BU_B", 84_000, 447_100, postcode=-99997),
+        feature("BU_C", 84_000, 447_200, postcode="."),
+    ]
+
+    buurten = find_buurten_within(CENTRE, 5, wfs_client([page]))
+
+    assert [b.postcode for b in buurten] == ["2611", None, None]
