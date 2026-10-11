@@ -19,7 +19,9 @@ GitHub Pages. It has two ways in:
 
 - **Search an area**: a town and a radius, the highest number of crimes per 1,000
   residents you accept for each type of crime, and the share of residents with
-  origin the Netherlands. You get a map and a list of the neighbourhoods that fit.
+  origin the Netherlands or the rest of Europe. You get a map and a list of the
+  neighbourhoods that fit. On the map, a rejected neighbourhood tells you which
+  limits it breaks when you hold the mouse over it.
 - **One neighbourhood**: a postcode or address shows the page of the neighbourhood
   it lies in.
 

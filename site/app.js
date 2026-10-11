@@ -3,7 +3,8 @@
 
 const PDOK_SEARCH = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free";
 const STORAGE_KEY = "huis-monitor-v3";
-const ORIGIN_METRIC = "origin_nl_pct";
+const ORIGIN_METRICS = ["origin_nl_pct", "origin_europe_pct"];
+const ORIGIN_LABEL = "Residents with origin the Netherlands or the rest of Europe";
 
 const STATUS = {
   good: { label: "Meets every limit", fill: "#0ca30c", opacity: 0.6 },
@@ -12,7 +13,8 @@ const STATUS = {
 };
 
 // Limits a first-time visitor starts with: at least half of the residents with
-// origin the Netherlands, and for every type of crime the national average.
+// origin the Netherlands or the rest of Europe, and for every type of crime the
+// national average.
 const DEFAULT_ORIGIN = { originMin: "50", originMax: "100" };
 
 function defaultCrimeLimits(index) {
@@ -48,6 +50,15 @@ function percent(value) {
 
 function euro(value) {
   return value === undefined || value === null ? "n/a" : `€ ${number(value, 0)}`;
+}
+
+// Share of residents with origin the Netherlands or another European country.
+// The two published shares are rounded, so their sum can pass 100 by a fraction.
+function originShare(figures) {
+  const parts = ORIGIN_METRICS.map((metric) => figures?.[metric]);
+  if (parts.some((part) => part === undefined || part === null)) return null;
+  const sum = parts.reduce((total, part) => total + part, 0);
+  return Math.min(100, Math.round(sum * 10) / 10);
 }
 
 function distanceKm(lat1, lon1, lat2, lon2) {
@@ -181,16 +192,18 @@ function limitsFromSaved(index) {
   for (const crime of index.crimes) {
     const value = saved.crimes[crime.metric];
     if (value !== undefined && value !== "") {
-      limits.push({ metric: crime.metric, kind: "max", value: Number(value), label: crime.label });
+      limits.push({
+        label: crime.label,
+        kind: "max",
+        value: Number(value),
+        read: (figures) => figures?.[crime.metric],
+        show: number,
+      });
     }
   }
-  const origin = "Residents with origin the Netherlands";
-  if (saved.originMin !== "") {
-    limits.push({ metric: ORIGIN_METRIC, kind: "min", value: Number(saved.originMin), label: origin });
-  }
-  if (saved.originMax !== "") {
-    limits.push({ metric: ORIGIN_METRIC, kind: "max", value: Number(saved.originMax), label: origin });
-  }
+  const origin = { label: ORIGIN_LABEL, read: originShare, show: percent };
+  if (saved.originMin !== "") limits.push({ ...origin, kind: "min", value: Number(saved.originMin) });
+  if (saved.originMax !== "") limits.push({ ...origin, kind: "max", value: Number(saved.originMax) });
   return limits;
 }
 
@@ -198,11 +211,11 @@ function judge(buurt, limits) {
   const breaks = [];
   const gaps = [];
   for (const limit of limits) {
-    const actual = buurt.figures?.[limit.metric];
+    const actual = limit.read(buurt.figures);
     if (actual === undefined || actual === null) {
       if (!gaps.includes(limit.label)) gaps.push(limit.label);
     } else if (limit.kind === "max" ? actual > limit.value : actual < limit.value) {
-      if (!breaks.includes(limit.label)) breaks.push(limit.label);
+      breaks.push({ limit, actual });
     }
   }
   const status = breaks.length ? "rejected" : gaps.length ? "warning" : "good";
@@ -295,6 +308,24 @@ function shapeOf(buurt, status) {
   });
 }
 
+// What the map says about a neighbourhood under the mouse: its name, its status
+// and, when it is rejected, every limit it breaks.
+function tooltipOf(buurt, gemeente, verdict) {
+  const lines = [`<b>${esc(buurt.name)}</b>`, esc(gemeente)];
+  if (verdict.status === "rejected") {
+    lines.push("Rejected, because:");
+    for (const { limit, actual } of verdict.breaks) {
+      const bound = `${limit.kind === "max" ? "at most" : "at least"} ${limit.show(limit.value)}`;
+      lines.push(`${esc(limit.label)}: <b>${limit.show(actual)}</b> (${bound})`);
+    }
+  } else if (verdict.status === "warning") {
+    lines.push(`Data missing: ${esc(verdict.gaps.join("; "))}`);
+  } else {
+    lines.push(STATUS.good.label);
+  }
+  return lines.join("<br>");
+}
+
 function drawSearchMap(element, result) {
   const map = startMap(element);
   const centre = L.latLng(result.centre.lat, result.centre.lon);
@@ -303,9 +334,7 @@ function drawSearchMap(element, result) {
   const rows = [...result.rows].sort((a, b) => order[a.verdict.status] - order[b.verdict.status]);
   for (const { buurt, gemeente, verdict } of rows) {
     shapeOf(buurt, verdict.status)
-      .bindTooltip(`<b>${esc(buurt.name)}</b><br>${esc(gemeente)}<br>${STATUS[verdict.status].label}`, {
-        sticky: true,
-      })
+      .bindTooltip(tooltipOf(buurt, gemeente, verdict), { sticky: true, className: "verdict" })
       .on("click", () => {
         location.hash = `#/buurt/${buurt.code}`;
       })
@@ -356,9 +385,9 @@ function searchForm(index) {
       </div>
 
       <div class="field">
-        <span class="field-title">Residents with origin the Netherlands
-          <span class="hint">Share of residents, in percent. ${referenceName(index)}:
-          ${percent(index.average[ORIGIN_METRIC])}. Leave empty for no limit.</span>
+        <span class="field-title">${ORIGIN_LABEL}
+          <span class="hint">The two shares added up, in percent. ${referenceName(index)}:
+          ${percent(originShare(index.average))}. Leave empty for no limit.</span>
         </span>
         <div class="pair">
           <label><span class="hint">At least</span>
@@ -414,7 +443,7 @@ function resultTable(rows, withGaps) {
           <td><a href="#/buurt/${buurt.code}">${esc(buurt.name)}</a></td>
           <td>${esc(gemeente)}</td>
           <td class="number">${number(km)}</td>
-          <td class="number">${percent(figures[ORIGIN_METRIC])}</td>
+          <td class="number">${percent(originShare(figures))}</td>
           <td class="number">${number(figures.burglaries_per_1000)}</td>
           <td class="number">${number(figures.violent_crimes_per_1000)}</td>
           <td class="number">${number(figures.crimes_total_per_1000)}</td>
@@ -427,7 +456,7 @@ function resultTable(rows, withGaps) {
       <table class="results">
         <thead><tr>
           <th>Neighbourhood</th><th>Gemeente</th><th class="number">Km</th>
-          <th class="number">Origin NL</th><th class="number">Burglary</th>
+          <th class="number">Origin NL + Europe</th><th class="number">Burglary</th>
           <th class="number">Violence</th><th class="number">All crimes</th>
           ${withGaps ? "<th>No figures for</th>" : ""}
         </tr></thead>
@@ -509,7 +538,7 @@ function showMessage(form, text) {
 const SEARCH_INTRO = `
   <h1>Find a neighbourhood that fits</h1>
   <p class="lead">Name a town and a radius, say how much crime you accept and what share of
-  residents with origin the Netherlands you look for. You get every neighbourhood in range
+  residents with origin the Netherlands or the rest of Europe you look for. You get every neighbourhood in range
   that fits, on a map and in a list.</p>`;
 
 // Run the search in `saved` (or reuse the last one if nothing changed) and show it.
