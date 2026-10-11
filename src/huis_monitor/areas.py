@@ -54,6 +54,7 @@ class Buurt:
     outline: tuple[tuple[tuple[float, float], ...], ...] = ()
     lat: float = 0.0
     lon: float = 0.0
+    postcode: str | None = None  # the four digits most addresses here share
 
 
 def find_centre(town: str, client: httpx.Client) -> Centre:
@@ -161,9 +162,16 @@ def _to_buurt(feature: dict, centre: Centre | None) -> Buurt | None:
         residents=None if residents is None or residents < NO_DATA else int(residents),
         distance_km=round(distance_m / 1000, 1),
         outline=_outline(feature["geometry"]),
+        postcode=_postcode(props.get("meestVoorkomendePostcode")),
         lat=round(lat, 5),
         lon=round(lon, 5),
     )
+
+
+def _postcode(value: object) -> str | None:
+    """Four-digit postcode area, or ``None`` when CBS gives a no-data marker."""
+    text = str(value).strip()
+    return text if len(text) == 4 and text.isdigit() else None
 
 
 def _polygons(geometry: dict) -> list:

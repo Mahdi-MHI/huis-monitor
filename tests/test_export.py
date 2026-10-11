@@ -22,6 +22,7 @@ def buurt(code: str, gemeente_code: str, gemeente_name: str) -> Buurt:
         outline=(RING,),
         lat=52.005,
         lon=4.355,
+        postcode="2628" if gemeente_code == "GM0503" else None,
     )
 
 
@@ -114,6 +115,7 @@ def test_writes_one_file_per_gemeente_and_an_index(fake_sources, tmp_path):
     assert first["code"] == "BU05030001"
     assert (first["lat"], first["lon"]) == (52.005, 4.355)
     assert first["outline"][0][0] == [4.35, 52.0]
+    assert first["postcode"] == "2628"
     assert first["figures"]["burglaries_per_1000"] == 1.0
     assert first["figures"]["men_pct"] == 50.0
     assert first["figures"]["arson_per_1000"] == 2.0
@@ -127,6 +129,7 @@ def test_neighbourhood_without_figures_is_still_listed(fake_sources, tmp_path):
     rijswijk = read(tmp_path / "gm" / "GM0603.json")
     assert rijswijk["average"] == {}
     assert "figures" not in rijswijk["buurten"][0]
+    assert "postcode" not in rijswijk["buurten"][0]
 
 
 def test_can_be_limited_to_some_gemeenten(fake_sources, tmp_path):

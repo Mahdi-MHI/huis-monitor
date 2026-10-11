@@ -459,6 +459,32 @@ details > summary {
   }
 }
 
+.funda {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 0 0 4px;
+  font-size: var(--step--1);
+  color: var(--ink-soft);
+}
+
+.funda span {
+  flex: 1 1 260px;
+  max-width: 52ch;
+}
+
+a.button {
+  display: inline-block;
+  padding: 9px 14px;
+  border-radius: 4px;
+  background: var(--action);
+  color: var(--action-ink);
+  font-size: var(--step-0);
+  font-weight: 600;
+  text-decoration: none;
+}
+
 .facts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
