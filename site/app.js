@@ -733,6 +733,20 @@ function crimeTable(buurt, file, index) {
     </div>`;
 }
 
+// Funda searches by four-digit postcode area, which is usually a bit larger
+// than one neighbourhood.
+function fundaLink(buurt) {
+  if (!buurt.postcode) return "";
+  const area = encodeURIComponent(JSON.stringify([buurt.postcode]));
+  return `
+    <p class="funda">
+      <a class="button" href="https://www.funda.nl/zoeken/koop?selected_area=${area}"
+        target="_blank" rel="noopener">See homes for sale on Funda</a>
+      <span>Funda shows postcode area ${esc(buurt.postcode)}, which can reach past this
+      neighbourhood. Look up a home's full postcode under One neighbourhood to be sure.</span>
+    </p>`;
+}
+
 async function renderBuurt(code) {
   const index = await loadIndex();
   describeData(index);
@@ -760,6 +774,7 @@ async function renderBuurt(code) {
       <div>
         <h1>${esc(buurt.name)}</h1>
         <p class="lead">Neighbourhood in ${esc(file.name)}, CBS code ${esc(buurt.code)}</p>
+        ${fundaLink(buurt)}
         <dl class="facts">
           <div><dt>Residents</dt><dd>${number(figures.residents, 0)}</dd></div>
           <div><dt>Residents per km²</dt><dd>${number(figures.density_per_km2, 0)}</dd></div>
