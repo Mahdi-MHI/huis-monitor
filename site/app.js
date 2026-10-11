@@ -2,7 +2,7 @@
 // `python -m huis_monitor export` and asks PDOK where a town or address is.
 
 const PDOK_SEARCH = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free";
-const STORAGE_KEY = "huis-monitor-v2";
+const STORAGE_KEY = "huis-monitor-v3";
 const ORIGIN_METRIC = "origin_nl_pct";
 
 const STATUS = {
@@ -11,25 +11,18 @@ const STATUS = {
   rejected: { label: "Rejected", fill: "#8f8f8a", opacity: 0.22 },
 };
 
-// Limits a first-time visitor starts with. Crime figures are per 1,000 residents.
-const DEFAULT_LIMITS = {
-  originMin: "50",
-  originMax: "100",
-  crimes: {
-    burglaries_per_1000: "0.6",
-    vehicle_thefts_per_1000: "1.7",
-    bike_thefts_per_1000: "4",
-    pickpocketing_per_1000: "0",
-    traffic_accidents_per_1000: "1.7",
-    violent_crimes_per_1000: "0.6",
-    arson_per_1000: "0.6",
-    drug_nuisance_per_1000: "0",
-    vandalism_per_1000: "0.6",
-    trespassing_per_1000: "0",
-    crimes_total_per_1000: "15.3",
-  },
-};
-const NO_LIMITS = { originMin: "", originMax: "", crimes: {} };
+// Limits a first-time visitor starts with: at least half of the residents with
+// origin the Netherlands, and for every type of crime the national average.
+const DEFAULT_ORIGIN = { originMin: "50", originMax: "100" };
+
+function defaultCrimeLimits(index) {
+  const limits = {};
+  for (const crime of index.crimes) {
+    const average = index.average[crime.metric];
+    if (average !== undefined && average !== null) limits[crime.metric] = String(average);
+  }
+  return limits;
+}
 
 const view = document.getElementById("view");
 const store = { index: null, gemeenten: new Map(), search: null, map: null };
@@ -71,8 +64,8 @@ function readSaved() {
     town: "Delft",
     radius: 15,
     lookup: "",
-    ...DEFAULT_LIMITS,
-    crimes: { ...DEFAULT_LIMITS.crimes },
+    ...DEFAULT_ORIGIN,
+    crimes: null, // filled with the national averages once the data is loaded
   };
   try {
     return { ...defaults, ...JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") };
@@ -336,7 +329,8 @@ function searchForm(index) {
 
       <div class="field">
         <span class="field-title">Registered crimes per 1,000 residents, ${index.crime_year}
-          <span class="hint">Type the highest number you accept. Leave empty for no limit.</span>
+          <span class="hint">Type the highest number you accept. Leave empty for no limit.
+          The starting limits are the ${referenceName(index).toLowerCase()} figures.</span>
         </span>
         <div class="table-scroll">
           <table class="limits">
@@ -452,6 +446,7 @@ function showMessage(form, text) {
 async function renderHome() {
   const index = await loadIndex();
   describeData(index);
+  if (saved.crimes === null) saved.crimes = defaultCrimeLimits(index);
 
   view.innerHTML = `
     <div class="workspace">
@@ -495,8 +490,11 @@ async function renderHome() {
       const typed = new FormData(view.querySelector("#search-form"));
       saved.town = typed.get("town").trim();
       saved.radius = typed.get("radius");
-      const preset = button.dataset.preset === "default" ? DEFAULT_LIMITS : NO_LIMITS;
-      Object.assign(saved, preset, { crimes: { ...preset.crimes } });
+      if (button.dataset.preset === "default") {
+        Object.assign(saved, DEFAULT_ORIGIN, { crimes: defaultCrimeLimits(index) });
+      } else {
+        Object.assign(saved, { originMin: "", originMax: "", crimes: {} });
+      }
       writeSaved();
       renderHome();
     });
