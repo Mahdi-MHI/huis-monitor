@@ -2,7 +2,7 @@
 // `python -m huis_monitor export` and asks PDOK where a town or address is.
 
 const PDOK_SEARCH = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free";
-const STORAGE_KEY = "huis-monitor-v1";
+const STORAGE_KEY = "huis-monitor-v2";
 const ORIGIN_METRIC = "origin_nl_pct";
 
 const STATUS = {
@@ -10,6 +10,26 @@ const STATUS = {
   warning: { label: "Data missing", fill: "#fab219", opacity: 0.65 },
   rejected: { label: "Rejected", fill: "#8f8f8a", opacity: 0.22 },
 };
+
+// Limits a first-time visitor starts with. Crime figures are per 1,000 residents.
+const DEFAULT_LIMITS = {
+  originMin: "50",
+  originMax: "100",
+  crimes: {
+    burglaries_per_1000: "0.6",
+    vehicle_thefts_per_1000: "1.7",
+    bike_thefts_per_1000: "4",
+    pickpocketing_per_1000: "0",
+    traffic_accidents_per_1000: "1.7",
+    violent_crimes_per_1000: "0.6",
+    arson_per_1000: "0.6",
+    drug_nuisance_per_1000: "0",
+    vandalism_per_1000: "0.6",
+    trespassing_per_1000: "0",
+    crimes_total_per_1000: "15.3",
+  },
+};
+const NO_LIMITS = { originMin: "", originMax: "", crimes: {} };
 
 const view = document.getElementById("view");
 const store = { index: null, gemeenten: new Map(), search: null, map: null };
@@ -46,7 +66,14 @@ function distanceKm(lat1, lon1, lat2, lon2) {
 }
 
 function readSaved() {
-  const defaults = { mode: "search", town: "Delft", radius: 15, crimes: {}, originMin: "", originMax: "", lookup: "" };
+  const defaults = {
+    mode: "search",
+    town: "Delft",
+    radius: 15,
+    lookup: "",
+    ...DEFAULT_LIMITS,
+    crimes: { ...DEFAULT_LIMITS.crimes },
+  };
   try {
     return { ...defaults, ...JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") };
   } catch {
@@ -321,6 +348,10 @@ function searchForm(index) {
       </div>
 
       <button class="primary" type="submit">Find neighbourhoods</button>
+      <div class="presets">
+        <button type="button" data-preset="default">Use the starting limits</button>
+        <button type="button" data-preset="none">Clear all limits</button>
+      </div>
       <p id="form-message" class="message" hidden></p>
     </form>`;
 }
@@ -453,6 +484,19 @@ async function renderHome() {
   for (const button of view.querySelectorAll(".modes button")) {
     button.addEventListener("click", () => {
       saved.mode = button.dataset.mode;
+      writeSaved();
+      renderHome();
+    });
+  }
+
+  for (const button of view.querySelectorAll("[data-preset]")) {
+    button.addEventListener("click", () => {
+      // Keep the town and radius that are typed in; only the limits change.
+      const typed = new FormData(view.querySelector("#search-form"));
+      saved.town = typed.get("town").trim();
+      saved.radius = typed.get("radius");
+      const preset = button.dataset.preset === "default" ? DEFAULT_LIMITS : NO_LIMITS;
+      Object.assign(saved, preset, { crimes: { ...preset.crimes } });
       writeSaved();
       renderHome();
     });
