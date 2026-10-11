@@ -385,6 +385,31 @@ th.number {
   background: var(--rejected);
 }
 
+.share {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0 0 16px;
+  font-size: var(--step--1);
+  color: var(--ink-soft);
+}
+
+.share button {
+  font: inherit;
+  font-weight: 600;
+  padding: 6px 12px;
+  border: 1px solid var(--action);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--action);
+  cursor: pointer;
+}
+
+.share input {
+  flex: 1 1 100%;
+}
+
 .map {
   height: 460px;
   border: 1px solid var(--line);

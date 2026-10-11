@@ -25,7 +25,7 @@ function defaultCrimeLimits(index) {
 }
 
 const view = document.getElementById("view");
-const store = { index: null, gemeenten: new Map(), search: null, map: null };
+const store = { index: null, gemeenten: new Map(), search: null, searchKey: null, map: null };
 const saved = readSaved();
 
 // ---------- Small helpers ----------
@@ -129,6 +129,49 @@ async function findTown(name, index) {
   if (!gemeente) return null;
   const [west, south, east, north] = gemeente.bounds;
   return { name: gemeente.name, lon: (west + east) / 2, lat: (south + north) / 2 };
+}
+
+// ---------- Links to a search ----------
+// A search is written into the address as #/search?town=Delft&radius=15&...,
+// so the page can be bookmarked or sent to someone else.
+
+function searchHash() {
+  const params = new URLSearchParams();
+  params.set("town", saved.town);
+  params.set("radius", saved.radius);
+  if (saved.originMin !== "") params.set("origin_min", saved.originMin);
+  if (saved.originMax !== "") params.set("origin_max", saved.originMax);
+  for (const [metric, value] of Object.entries(saved.crimes ?? {})) {
+    if (value !== "") params.set(metric.replace(/_per_1000$/, ""), value);
+  }
+  return `#/search?${params}`;
+}
+
+function cleanNumber(text) {
+  if (text === null || text.trim() === "") return "";
+  const value = Number(text);
+  return Number.isFinite(value) && value >= 0 ? String(value) : "";
+}
+
+// Take over the search described by a link. Returns false if it names no town.
+function applySearchHash(hash, index) {
+  const params = new URLSearchParams(hash.slice(hash.indexOf("?") + 1));
+  const town = (params.get("town") ?? "").trim();
+  if (!town) return false;
+
+  const radius = Number(params.get("radius"));
+  saved.mode = "search";
+  saved.town = town;
+  saved.radius = radius >= 1 && radius <= 50 ? String(radius) : "15";
+  saved.originMin = cleanNumber(params.get("origin_min"));
+  saved.originMax = cleanNumber(params.get("origin_max"));
+  saved.crimes = {};
+  for (const crime of index.crimes) {
+    const value = cleanNumber(params.get(crime.count));
+    if (value !== "") saved.crimes[crime.metric] = value;
+  }
+  writeSaved();
+  return true;
 }
 
 // ---------- Judging neighbourhoods ----------
@@ -402,6 +445,11 @@ function renderResults(target) {
     <h1>Neighbourhoods around ${esc(result.centre.name.split(",")[0])}</h1>
     <p class="lead">${result.rows.length} neighbourhoods lie within ${number(result.radius)} km.
       ${result.limits.length ? "" : "No limits are set, so all of them qualify."}</p>
+    <p class="share">
+      <button type="button" id="copy-link">Copy a link to this search</button>
+      <span id="copy-note" role="status"></span>
+      <input id="copy-fallback" type="text" readonly hidden aria-label="Link to this search">
+    </p>
     <ul class="tally">
       ${Object.entries(groups)
         .map(
@@ -429,6 +477,21 @@ function renderResults(target) {
         : ""
     }`;
 
+  target.querySelector("#copy-link").addEventListener("click", async () => {
+    const note = target.querySelector("#copy-note");
+    try {
+      await navigator.clipboard.writeText(location.href);
+      note.textContent = "Link copied. Anyone who opens it sees this search.";
+    } catch {
+      // No clipboard access (for example an old browser): show the link to copy by hand.
+      const field = target.querySelector("#copy-fallback");
+      field.value = location.href;
+      field.hidden = false;
+      field.select();
+      note.textContent = "Copy the link below.";
+    }
+  });
+
   drawSearchMap(target.querySelector("#search-map"), result);
   for (const row of target.querySelectorAll("tr[data-code]")) {
     row.addEventListener("click", () => {
@@ -443,9 +506,45 @@ function showMessage(form, text) {
   message.hidden = !text;
 }
 
-async function renderHome() {
+const SEARCH_INTRO = `
+  <h1>Find a neighbourhood that fits</h1>
+  <p class="lead">Name a town and a radius, say how much crime you accept and what share of
+  residents with origin the Netherlands you look for. You get every neighbourhood in range
+  that fits, on a map and in a list.</p>`;
+
+// Run the search in `saved` (or reuse the last one if nothing changed) and show it.
+async function showSearch(results, form) {
+  const key = searchHash();
+  if (!store.search || store.searchKey !== key) {
+    const button = form.querySelector("button.primary");
+    button.disabled = true;
+    results.innerHTML = '<p class="loading">Searching…</p>';
+    try {
+      const result = await search();
+      if (result.error) {
+        results.innerHTML = SEARCH_INTRO;
+        showMessage(form, result.error);
+        return;
+      }
+      store.search = result;
+      store.searchKey = key;
+    } catch (error) {
+      console.error(error);
+      results.innerHTML = SEARCH_INTRO;
+      showMessage(form, "The figures could not be loaded. Check your connection and try again.");
+      return;
+    } finally {
+      button.disabled = false;
+    }
+  }
+  renderResults(results);
+}
+
+// `searchLink` is the address of a search (#/search?...) or null for the start page.
+async function renderHome(searchLink) {
   const index = await loadIndex();
   describeData(index);
+  const searching = Boolean(searchLink) && applySearchHash(searchLink, index);
   if (saved.crimes === null) saved.crimes = defaultCrimeLimits(index);
 
   view.innerHTML = `
@@ -461,14 +560,8 @@ async function renderHome() {
     </div>`;
 
   const results = view.querySelector("#results");
-  if (saved.mode === "search" && store.search) {
-    renderResults(results);
-  } else if (saved.mode === "search") {
-    results.innerHTML = `
-      <h1>Find a neighbourhood that fits</h1>
-      <p class="lead">Name a town and a radius, say how much crime you accept and what share of
-      residents with origin the Netherlands you look for. You get every neighbourhood in range
-      that fits, on a map and in a list.</p>`;
+  if (saved.mode === "search") {
+    results.innerHTML = SEARCH_INTRO;
   } else {
     results.innerHTML = `
       <h1>Look up one neighbourhood</h1>
@@ -476,11 +569,17 @@ async function renderHome() {
       lies in: who lives there, what the homes are like and how much crime is registered.</p>`;
   }
 
+  // Leave a search address behind without adding a step to the browser history.
+  const showStartPage = () => {
+    if (location.hash.startsWith("#/search")) history.replaceState(null, "", "#/");
+    renderHome(null);
+  };
+
   for (const button of view.querySelectorAll(".modes button")) {
     button.addEventListener("click", () => {
       saved.mode = button.dataset.mode;
       writeSaved();
-      renderHome();
+      showStartPage();
     });
   }
 
@@ -496,14 +595,13 @@ async function renderHome() {
         Object.assign(saved, { originMin: "", originMax: "", crimes: {} });
       }
       writeSaved();
-      renderHome();
+      showStartPage();
     });
   }
 
-  view.querySelector("#search-form")?.addEventListener("submit", async (event) => {
+  view.querySelector("#search-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
-    const form = event.currentTarget;
-    const data = new FormData(form);
+    const data = new FormData(event.currentTarget);
     saved.town = data.get("town").trim();
     saved.radius = data.get("radius");
     saved.originMin = data.get("originMin");
@@ -514,23 +612,10 @@ async function renderHome() {
     }
     writeSaved();
 
-    const button = form.querySelector("button.primary");
-    button.disabled = true;
-    showMessage(form, "");
-    try {
-      const result = await search();
-      if (result.error) {
-        showMessage(form, result.error);
-      } else {
-        store.search = result;
-        renderResults(results);
-      }
-    } catch (error) {
-      console.error(error);
-      showMessage(form, "The figures could not be loaded. Check your connection and try again.");
-    } finally {
-      button.disabled = false;
-    }
+    // The address carries the search; changing it makes the page run the search.
+    const link = searchHash();
+    if (location.hash === link) route();
+    else location.hash = link;
   });
 
   view.querySelector("#lookup-form")?.addEventListener("submit", async (event) => {
@@ -546,6 +631,8 @@ async function renderHome() {
     if (found.error) showMessage(form, found.error);
     else location.hash = `#/buurt/${found.code}`;
   });
+
+  if (searching) await showSearch(results, view.querySelector("#search-form"));
 }
 
 // ---------- One neighbourhood ----------
@@ -658,7 +745,7 @@ async function renderBuurt(code) {
   }
   const buurt = file?.buurten.find((entry) => entry.code === code);
   const back = store.search
-    ? '<a class="back" href="#/">Back to the results</a>'
+    ? `<a class="back" href="${esc(store.searchKey)}">Back to the results</a>`
     : '<a class="back" href="#/">Search an area</a>';
   if (!buurt) {
     view.innerHTML = `${back}<h1>Neighbourhood not found</h1>
@@ -717,7 +804,7 @@ async function route() {
   const match = /^#\/buurt\/(BU\d{8})$/.exec(location.hash);
   try {
     if (match) await renderBuurt(match[1]);
-    else await renderHome();
+    else await renderHome(location.hash.startsWith("#/search?") ? location.hash : null);
   } catch (error) {
     console.error(error);
     view.innerHTML = `<h1>The figures could not be loaded</h1>
